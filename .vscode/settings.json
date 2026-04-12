@@ -1,0 +1,11 @@
+{
+  "workbench.editorAssociations": {
+    "*.js": "default",
+    "*.md": "default",
+    "*.json": "default",
+    "*.txt": "default",
+    "*.env*": "default",
+    ".gitignore": "default",
+    "package.json": "default"
+  }
+}

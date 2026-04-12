@@ -1,0 +1,18 @@
+{
+  "_note": "NSE trading holidays. Verify against https://www.nseindia.com/global/content/market_timings_holidays/market_timings_holidays.htm each year.",
+  "2025": [
+    { "date": "2025-02-26", "day": "Wednesday", "name": "Mahashivratri" },
+    { "date": "2025-03-14", "day": "Friday",    "name": "Holi" },
+    { "date": "2025-03-31", "day": "Monday",    "name": "Id-Ul-Fitr (Eid)" },
+    { "date": "2025-04-14", "day": "Monday",    "name": "Dr. Baba Saheb Ambedkar Jayanti" },
+    { "date": "2025-04-18", "day": "Friday",    "name": "Good Friday" },
+    { "date": "2025-05-01", "day": "Thursday",  "name": "Maharashtra Day" },
+    { "date": "2025-08-15", "day": "Friday",    "name": "Independence Day" },
+    { "date": "2025-10-02", "day": "Thursday",  "name": "Mahatma Gandhi Jayanti" },
+    { "date": "2025-10-20", "day": "Monday",    "name": "Diwali - Laxmi Puja" },
+    { "date": "2025-10-21", "day": "Tuesday",   "name": "Diwali - Balipratipada" },
+    { "date": "2025-11-05", "day": "Wednesday", "name": "Prakash Gurpurb (Gurunanak Jayanti)" },
+    { "date": "2025-12-25", "day": "Thursday",  "name": "Christmas" }
+  ],
+  "2026": []
+}

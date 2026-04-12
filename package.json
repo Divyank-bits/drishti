@@ -1,0 +1,31 @@
+{
+  "name": "drishti",
+  "version": "1.0.0",
+  "description": "AI-powered NIFTY options trading system for Indian markets (NSE/BSE)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "NODE_ENV=development node index.js",
+    "test:phase0": "node test-phase0.js",
+    "test:phase1": "node test-phase1.js",
+    "test:phase2": "node test-phase2.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "axios": "^1.6.8",
+    "black-scholes": "^1.0.0",
+    "dayjs": "^1.11.10",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.64.0",
+    "technicalindicators": "^3.1.0",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Divyank Vyas",
+  "license": "UNLICENSED",
+  "private": true
+}
