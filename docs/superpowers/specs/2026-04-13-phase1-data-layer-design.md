@@ -91,14 +91,14 @@ if (config.DATA_SOURCE === 'DHAN') {
 
 ### `data/sources/nse-source.js` (Phase 1)
 
-Polls NSE for NIFTY LTP every 3 seconds during market hours (09:15–15:30 IST). Uses the same NSE session cookie mechanism as `options-chain.js`. Emits `TICK_RECEIVED` on each successful poll.
+Polls NSE for NIFTY LTP every 3 seconds during market hours (09:15–15:30 IST) via the `stock-nse-india` npm library (`NseIndia.getEquityStockIndices("NIFTY 50")`). The library handles session cookies and headers automatically (rotates every 60s), eliminating manual scraping fragility.
 
 **Poll behavior:**
-- `setInterval` at 3000ms, market hours only
-- LTP sourced from NSE quote endpoint (`/api/quote-equity?symbol=NIFTY%2050`)
+- `start()` is async — performs a warm-up call to initialise the NSE session before starting `setInterval` at 3000ms. Retries warm-up every 10s on failure.
+- LTP extracted from `data.data.find(idx => idx.index === "NIFTY 50").last`
 - Emits `WEBSOCKET_CONNECTED` on first successful poll (signals system is receiving data)
-- On consecutive failures (>30s = 10 polls): emits `WEBSOCKET_RECONNECT_FAILED`
-- Volume field set to `0` (not available from NSE quote endpoint)
+- On consecutive failures (>30s = 10 polls): emits `WEBSOCKET_RECONNECT_FAILED`, resets counter
+- Volume field set to `0` (index data does not include real-time volume)
 
 **Why NSE polling works for Iron Condor:**
 - Candle close detection uses epoch math — accurate to the minute, 3s polling is sufficient
@@ -175,17 +175,13 @@ After successful fetch from sources 1 or 2: write to `data/cache/nifty-15m.json`
 
 ### `data/options-chain.js`
 
-Fetches NSE option chain every 15 minutes during market hours (09:15–15:30 IST) via `node-cron`.
+Fetches NSE option chain every 15 minutes during market hours (09:15–15:30 IST) via `node-cron`, using `stock-nse-india` (`NseIndia.getOptionChain("NIFTY")`). The library handles session cookies automatically.
 
-**NSE fetch sequence:**
-1. `GET https://www.nseindia.com` — grab session cookie
-2. `GET https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY` — with cookie + headers
-
-**Cookie failure handling:**
-- On fail: re-fetch cookie, retry chain call once
-- Second fail: emit `OPTIONS_CHAIN_STALE {reason, lastGoodTimestamp}`
-
-**Source interface:** All NSE-specific logic isolated in `_fetchFromNSE()`. Future Dhan swap = add `_fetchFromDhan()`, change one line.
+**Fetch behavior:**
+- `start()` schedules the cron job and triggers an initial fetch 5s after boot
+- Single try/catch — library handles cookie refresh internally; on any failure emits `OPTIONS_CHAIN_STALE`
+- Max OI strikes parsed from `filtered.data` (pre-filtered to nearest expiry by the library)
+- PCR from `filtered.CE.totOI` / `filtered.PE.totOI`
 
 **`OPTIONS_CHAIN_UPDATED` payload:**
 ```js
@@ -326,9 +322,9 @@ Cache directory: `data/cache/` (git-ignored).
 
 ## Known Fragility Points
 
-1. **NSE cookie** — most brittle piece. Cookie expires 30–60 min. Silent retry covers normal rotation. If NSE changes their endpoint or adds bot detection, options chain will stale.
+1. **`stock-nse-india` library** — mitigates the manual cookie problem (auto-rotates every 60s), but still depends on NSE's web endpoints. If NSE changes their page structure or tightens bot detection, the library will fail until it's updated. Upstream: MIT, last commit Dec 2025.
 2. **Yahoo Finance** — unofficial API, no SLA. Used only as historical fallback at boot.
-3. **NSE LTP polling** — same cookie fragility as options chain. If NSE rate-limits or changes the quote endpoint, tick stream stalls. For Phase 3, switching to `DATA_SOURCE=DHAN` eliminates this.
+3. **NSE LTP polling precision** — volume is always `0` (index endpoint doesn't return it). Anti-hunt volume rules fall back to candle-level volume in Phase 2. For real-time volume, switch to `DATA_SOURCE=DHAN` in Phase 3.
 4. **Dhan token** (Phase 3 only) — expires 24h. Proactive renewal cron mitigates. If renewal API changes, WebSocket feed dies silently until restart.
 
 ---

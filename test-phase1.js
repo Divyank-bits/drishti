@@ -390,19 +390,19 @@ await test('T28 OptionsChain: _parseOptionChain() produces correct shape from fa
   resetModules('./data/options-chain');
   const oc = require('./data/options-chain');
 
-  // Minimal fake NSE option chain response
+  // Fake NSE response matching stock-nse-india library shape:
+  // filtered.data = pre-filtered legs for the nearest expiry
   const fakeNSE = {
     records: {
       underlyingValue: 24185.3,
       expiryDates: ['24-Apr-2025', '01-May-2025'],
-      data: [
-        { expiryDate: '24-Apr-2025', strikePrice: 24000, CE: { openInterest: 50000, impliedVolatility: 12 }, PE: { openInterest: 30000, impliedVolatility: 11 } },
-        { expiryDate: '24-Apr-2025', strikePrice: 24500, CE: { openInterest: 120000, impliedVolatility: 10 }, PE: { openInterest: 20000, impliedVolatility: 10 } },
-        { expiryDate: '24-Apr-2025', strikePrice: 23800, CE: { openInterest: 15000, impliedVolatility: 13 }, PE: { openInterest: 110000, impliedVolatility: 12 } },
-        { expiryDate: '01-May-2025', strikePrice: 24500, CE: { openInterest: 80000, impliedVolatility: 11 }, PE: { openInterest: 60000, impliedVolatility: 11 } },
-      ],
     },
     filtered: {
+      data: [
+        { strikePrice: 24000, CE: { openInterest: 50000, impliedVolatility: 12 }, PE: { openInterest: 30000, impliedVolatility: 11 } },
+        { strikePrice: 24500, CE: { openInterest: 120000, impliedVolatility: 10 }, PE: { openInterest: 20000, impliedVolatility: 10 } },
+        { strikePrice: 23800, CE: { openInterest: 15000, impliedVolatility: 13 }, PE: { openInterest: 110000, impliedVolatility: 12 } },
+      ],
       CE: { totOI: 185000 },
       PE: { totOI: 160000 },
     },

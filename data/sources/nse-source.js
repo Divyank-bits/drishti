@@ -1,24 +1,18 @@
 /**
  * @file nse-source.js
- * @description Polls NSE for NIFTY LTP every 3 seconds during market hours.
- *              Emits TICK_RECEIVED {symbol, ltp, volume:0, timestamp} on each poll.
- *              Used when DATA_SOURCE='NSE' (default, no paid subscription required).
- *
- *              Volume is 0 — NSE quote endpoint does not return volume.
- *              Anti-hunt volume rules will treat 0-volume ticks as "data unavailable"
- *              and fall back to candle-level volume (Phase 2).
+ * @description Polls NSE for NIFTY LTP using stock-nse-india package.
+ * Emits TICK_RECEIVED {symbol, ltp, volume:0, timestamp} on each poll.
+ * Handles session initialization and cookie refreshes automatically.
  */
 
 'use strict';
 
-const axios    = require('axios');
-const eventBus = require('../../core/event-bus');
-const EVENTS   = require('../../core/events');
+const { NseIndia } = require('stock-nse-india');
+const eventBus     = require('../../core/event-bus');
+const EVENTS       = require('../../core/events');
 
-const NSE_BASE   = 'https://www.nseindia.com';
-const NSE_QUOTE  = `${NSE_BASE}/api/quote-equity?symbol=NIFTY%2050`;
-const UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
-const POLL_MS    = 3000;  // 3 second polling interval
+const nse = new NseIndia();
+const POLL_MS = 3000; 
 
 // Market hours in UTC (IST - 5:30)
 const MARKET_OPEN_UTC_H  = 3;   // 09:15 IST
@@ -26,8 +20,6 @@ const MARKET_OPEN_UTC_M  = 45;
 const MARKET_CLOSE_UTC_H = 10;  // 15:30 IST
 const MARKET_CLOSE_UTC_M = 0;
 
-// Consecutive failure threshold before emitting WEBSOCKET_RECONNECT_FAILED
-// 10 polls × 3s = 30s — matches WEBSOCKET_RECONNECT_TIMEOUT in config
 const MAX_FAILURES = 10;
 
 function log(level, msg) {
@@ -37,20 +29,42 @@ function log(level, msg) {
 
 class NseSource {
   constructor() {
-    this._cookie          = null;
-    this._timer           = null;
-    this._failureCount    = 0;
+    this._timer            = null;
+    this._failureCount     = 0;
     this._connectedEmitted = false;
+    this._isWarmingUp      = false;
   }
 
-  start() {
-    log('INFO', `Starting NSE LTP polling every ${POLL_MS / 1000}s`);
-    this._timer = setInterval(() => this._poll(), POLL_MS);
+  /**
+   * Starts the polling sequence.
+   * Performs a warm-up call to initialize NSE cookies before starting the interval.
+   */
+  async start() {
+    if (this._isWarmingUp) return;
+    this._isWarmingUp = true;
+
+    log('INFO', 'Initializing NSE session (warm-up)...');
+    
+    try {
+      // Library handshake: visiting the index page to get cookies
+      await nse.getEquityStockIndices("NIFTY 50");
+      log('INFO', 'NSE Session initialized successfully.');
+      
+      this._isWarmingUp = false;
+      this._timer = setInterval(() => this._poll(), POLL_MS);
+      this._poll(); // run first poll immediately
+    } catch (err) {
+      log('ERROR', `Warm-up failed: ${err.message}. Retrying in 10s...`);
+      this._isWarmingUp = false;
+      setTimeout(() => this.start(), 10000);
+    }
   }
 
   stop() {
-    clearInterval(this._timer);
-    this._timer = null;
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
+    }
     log('INFO', 'NSE polling stopped');
   }
 
@@ -64,18 +78,18 @@ class NseSource {
   }
 
   async _poll() {
+    // Only poll during market hours to avoid unnecessary 403s
     if (!this._isDuringMarketHours()) return;
 
     try {
-      if (!this._cookie) await this._refreshCookie();
+      // Fetch data for NIFTY 50 index
+      const data = await nse.getEquityStockIndices("NIFTY 50");
+      
+      // Find the NIFTY 50 entry in the indices list
+      const nifty = data.data.find(idx => idx.index === "NIFTY 50");
+      const ltp = nifty?.last;
 
-      const res = await axios.get(NSE_QUOTE, {
-        headers: { 'User-Agent': UA, 'Referer': NSE_BASE, 'Cookie': this._cookie },
-        timeout: 5000,
-      });
-
-      const ltp = res.data?.priceInfo?.lastPrice;
-      if (!ltp || ltp <= 0) throw new Error('Invalid LTP in response');
+      if (!ltp || ltp <= 0) throw new Error('Invalid LTP in library response');
 
       this._failureCount = 0;
 
@@ -87,33 +101,50 @@ class NseSource {
 
       eventBus.emit(EVENTS.TICK_RECEIVED, {
         symbol:    'NIFTY',
-        ltp,
-        volume:    0,
+        ltp:       parseFloat(ltp),
+        volume:    0, // Library index data doesn't provide real-time volume
         timestamp: Date.now(),
       });
+
     } catch (err) {
-      this._cookie = null; // force cookie refresh next poll
       this._failureCount++;
       log('WARN', `Poll failed (${this._failureCount}/${MAX_FAILURES}): ${err.message}`);
 
       if (this._failureCount >= MAX_FAILURES) {
-        log('ERROR', `${MAX_FAILURES} consecutive failures — emitting WEBSOCKET_RECONNECT_FAILED`);
+        log('ERROR', `${MAX_FAILURES} consecutive failures — signalling recovery`);
         eventBus.emit(EVENTS.WEBSOCKET_RECONNECT_FAILED, {
-          reason:    `NSE polling failed ${MAX_FAILURES} times consecutively`,
+          reason:    `NSE library failed ${MAX_FAILURES} times consecutively`,
           timestamp: Date.now(),
         });
-        this._failureCount = 0; // reset so circuit breaker (not this module) decides next step
+        this._failureCount = 0;
       }
     }
   }
 
-  async _refreshCookie() {
-    const r = await axios.get(NSE_BASE, {
-      headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
-      timeout: 8000,
+  async _poll2() {
+  try {
+    // Test with a specific stock instead of the index during off-market hours
+    const data = await nse.getEquityDetails("RELIANCE");
+    const ltp = data.priceInfo.lastPrice;
+
+    if (!ltp || ltp <= 0) throw new Error('Invalid LTP in library response');
+
+    this._failureCount = 0;
+    log('INFO', `Test Success: RELIANCE LTP is ${ltp}`);
+
+    eventBus.emit(EVENTS.TICK_RECEIVED, {
+      symbol:    'RELIANCE',
+      ltp:       parseFloat(ltp),
+      volume:    0,
+      timestamp: Date.now(),
     });
-    this._cookie = (r.headers['set-cookie'] || []).join('; ');
+
+  } catch (err) {
+    this._failureCount++;
+    log('WARN', `Poll failed (${this._failureCount}/${MAX_FAILURES}): ${err.message}`);
+    // ... rest of error handling
   }
+}
 }
 
 module.exports = new NseSource();

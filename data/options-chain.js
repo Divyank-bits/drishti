@@ -1,21 +1,18 @@
 /**
  * @file options-chain.js
- * @description Fetches NSE NIFTY option chain every OPTIONS_CHAIN_INTERVAL minutes
- *              during market hours. Handles cookie refresh with one silent retry.
- *              Emits OPTIONS_CHAIN_UPDATED on success, OPTIONS_CHAIN_STALE on double failure.
+ * @description Fetches NSE NIFTY option chain using stock-nse-india.
+ * Emits OPTIONS_CHAIN_UPDATED on success with PCR, Max OI, and ATM strike.
  */
 
 'use strict';
 
 const cron     = require('node-cron');
-const axios    = require('axios');
+const { NseIndia } = require('stock-nse-india');
 const eventBus = require('../core/event-bus');
 const EVENTS   = require('../core/events');
 const config   = require('../config');
 
-const NSE_BASE     = 'https://www.nseindia.com';
-const NSE_CHAIN    = `${NSE_BASE}/api/option-chain-indices?symbol=NIFTY`;
-const UA           = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+const nse = new NseIndia();
 
 // Market hours in UTC (IST - 5:30)
 const MARKET_OPEN_UTC_H  = 3;  // 09:15 IST
@@ -30,20 +27,39 @@ function log(level, msg) {
 
 class OptionsChain {
   constructor() {
-    this._cookie           = null;
     this._lastGoodResult   = null;
     this._lastGoodAt       = null;
   }
 
   start() {
-    // Run every 15 minutes on weekdays; handler checks market hours internally
+    // Run every 15 minutes as per config; cron syntax handles interval and weekdays
     cron.schedule(`*/${config.OPTIONS_CHAIN_INTERVAL} * * * 1-5`, () => this._tick());
-    log('INFO', `Polling every ${config.OPTIONS_CHAIN_INTERVAL}m on weekdays`);
+    log('INFO', `Option chain polling scheduled every ${config.OPTIONS_CHAIN_INTERVAL}m`);
+    
+    // Trigger initial fetch on boot (after a short delay for session warm-up)
+    setTimeout(() => this._tick(), 5000);
   }
 
   async _tick() {
     if (!this._isDuringMarketHours()) return;
-    await this._fetchWithRetry();
+    
+    try {
+      log('INFO', 'Fetching NIFTY option chain...');
+      const raw = await nse.getOptionChain("NIFTY");
+      const result = this._parseOptionChain(raw);
+      
+      this._lastGoodResult = result;
+      this._lastGoodAt     = Date.now();
+      
+      eventBus.emit(EVENTS.OPTIONS_CHAIN_UPDATED, result);
+      log('INFO', `Updated: NIFTY ATM:${result.atmStrike} PCR:${result.pcr} MaxCE:${result.maxCeOiStrike} MaxPE:${result.maxPeOiStrike}`);
+    } catch (err) {
+      log('ERROR', `Fetch failed: ${err.message}`);
+      eventBus.emit(EVENTS.OPTIONS_CHAIN_STALE, {
+        reason: err.message,
+        lastGoodTimestamp: this._lastGoodAt,
+      });
+    }
   }
 
   _isDuringMarketHours() {
@@ -55,81 +71,35 @@ class OptionsChain {
     return after && before;
   }
 
-  async _fetchWithRetry() {
-    try {
-      const raw    = await this._fetchFromNSE();
-      const result = this._parseOptionChain(raw);
-      this._lastGoodResult = result;
-      this._lastGoodAt     = Date.now();
-      eventBus.emit(EVENTS.OPTIONS_CHAIN_UPDATED, result);
-    } catch (firstErr) {
-      log('WARN', `First attempt failed (${firstErr.message}), refreshing cookie and retrying`);
-      this._cookie = null; // force cookie refresh on retry
-      try {
-        const raw    = await this._fetchFromNSE();
-        const result = this._parseOptionChain(raw);
-        this._lastGoodResult = result;
-        this._lastGoodAt     = Date.now();
-        eventBus.emit(EVENTS.OPTIONS_CHAIN_UPDATED, result);
-      } catch (secondErr) {
-        log('ERROR', `Both attempts failed: ${secondErr.message}`);
-        eventBus.emit(EVENTS.OPTIONS_CHAIN_STALE, {
-          reason:            secondErr.message,
-          lastGoodTimestamp: this._lastGoodAt,
-        });
-      }
-    }
-  }
-
-  async _fetchFromNSE() {
-    if (!this._cookie) {
-      const r = await axios.get(NSE_BASE, {
-        headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
-        timeout: 8000,
-      });
-      this._cookie = (r.headers['set-cookie'] || []).join('; ');
-    }
-
-    const res = await axios.get(NSE_CHAIN, {
-      headers: {
-        'User-Agent': UA,
-        'Referer':    NSE_BASE,
-        'Cookie':     this._cookie,
-      },
-      timeout: 10000,
-    });
-
-    if (!res.data || !res.data.records) throw new Error('Malformed NSE response');
-    return res.data;
-  }
-
-  // Pure parser — testable without any HTTP calls
   _parseOptionChain(raw) {
     const records = raw.records;
-    const expiry  = records.expiryDates[0]; // nearest expiry
+    const filtered = raw.filtered;
+    const expiry = records.expiryDates[0]; // Get nearest expiry
 
-    const legs = records.data.filter((d) => d.expiryDate === expiry);
-
+    // Find Max OI strikes in the filtered data (current expiry)
     let maxCeOI = 0, maxCeStrike = 0;
     let maxPeOI = 0, maxPeStrike = 0;
 
-    for (const leg of legs) {
+    for (const leg of filtered.data) {
       if (leg.CE && leg.CE.openInterest > maxCeOI) {
-        maxCeOI = leg.CE.openInterest; maxCeStrike = leg.strikePrice;
+        maxCeOI = leg.CE.openInterest;
+        maxCeStrike = leg.strikePrice;
       }
       if (leg.PE && leg.PE.openInterest > maxPeOI) {
-        maxPeOI = leg.PE.openInterest; maxPeStrike = leg.strikePrice;
+        maxPeOI = leg.PE.openInterest;
+        maxPeStrike = leg.strikePrice;
       }
     }
 
-    const totalCeOI = raw.filtered.CE.totOI || 1;
-    const totalPeOI = raw.filtered.PE.totOI || 0;
-    const pcr       = totalPeOI / totalCeOI;
+    // PCR Calculation from filtered totals
+    const totalCeOI = filtered.CE.totOI || 1;
+    const totalPeOI = filtered.PE.totOI || 0;
+    const pcr = totalPeOI / totalCeOI;
 
-    // ATM = nearest strike to underlying
+    // ATM Calculation: find strike closest to underlyingValue
     const underlying = records.underlyingValue;
-    const strikes    = [...new Set(legs.map((l) => l.strikePrice))].sort((a, b) => a - b);
-    const atmStrike  = strikes.reduce((prev, curr) =>
+    const strikes = filtered.data.map(l => l.strikePrice);
+    const atmStrike = strikes.reduce((prev, curr) =>
       Math.abs(curr - underlying) < Math.abs(prev - underlying) ? curr : prev
     );
 

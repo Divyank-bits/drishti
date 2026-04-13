@@ -14,12 +14,12 @@ buffers, indicator computation, and session context. NSE option chain polls ever
 | File | What it does |
 |------|-------------|
 | `tick-stream.js` | Factory: loads `nse-source.js` or `dhan-source.js` based on `DATA_SOURCE` config. |
-| `sources/nse-source.js` | Polls NSE LTP every 3s during market hours. Emits `TICK_RECEIVED`. Emits `WEBSOCKET_CONNECTED` on first successful poll. Resets after 10 consecutive failures. |
+| `sources/nse-source.js` | Polls NIFTY LTP every 3s via `stock-nse-india` library (auto-manages NSE cookies). Emits `TICK_RECEIVED`. Warm-up on start, 10-failure circuit. |
 | `sources/dhan-source.js` | Phase 3 stub — throws if `DATA_SOURCE=DHAN` is used. |
 | `candle-builder.js` | Aggregates ticks → 1m/5m/15m OHLCV. Rolling buffer of 200 candles. Epoch-based boundaries (timezone-safe). |
 | `indicator-engine.js` | RSI(14), EMA9/21, MACD(12,26,9), BB(20), ATR(14), ADX(14) via `technicalindicators`. Black-Scholes delta via finite diff. Returns null during warm-up. |
 | `historical.js` | Boot-time 15m candle fetch: NSE India → Yahoo Finance → local cache. Seeds CandleBuilder before tick stream starts. |
-| `options-chain.js` | NSE option chain every 15m. Cookie auto-refresh with one silent retry. Parses PCR, max OI strikes, ATM strike. |
+| `options-chain.js` | NSE option chain every 15m via `stock-nse-india` library. Parses PCR, max OI strikes, ATM strike from `filtered.data`. |
 | `cache/.gitkeep` | Cache directory for `nifty-15m.json` (git-ignored). |
 
 ### Modified
@@ -73,7 +73,7 @@ T28  OptionsChain: _parseOptionChain() produces correct shape from fake NSE JSON
 
 ## Known Limitations (By Design)
 
-- `DATA_SOURCE=NSE` volume field is always 0 — NSE quote endpoint doesn't return volume. Phase 2 anti-hunt volume rules fall back to candle-level volume.
+- `DATA_SOURCE=NSE` volume field is always 0 — NSE index endpoint doesn't return real-time volume. Phase 2 anti-hunt volume rules fall back to candle-level volume.
 - NSE option chain `vix` field may be null — NSE sometimes omits it. Phase 2 can fall back to VIX index API.
 - `currentRegime` stays null — Phase 2 rule engine sets it from indicators.
 - No crash recovery yet — pnlToday/tradesToday reset to 0 on restart. Phase 2 reads journal on boot.
