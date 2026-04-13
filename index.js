@@ -73,7 +73,7 @@ async function boot() {
   const registry = require('./strategies/registry');
   log('INFO', 'Registry', `${registry.count} strategy/strategies available`);
 
-  // ── Step 6: System ready ──────────────────────────────────────────────────
+  // ── Step 5b: System ready ─────────────────────────────────────────────────
   const summary = {
     intelligenceMode: config.INTELLIGENCE_MODE,
     executionMode: config.EXECUTION_MODE,
@@ -89,8 +89,26 @@ async function boot() {
 
   eventBus.emit(EVENTS.SYSTEM_READY, summary);
 
-  // ── Future phases add their boot steps here ──────────────────────────────
-  // Phase 1: init tick stream, historical fetch, options chain, indicator engine
+  // ── Phase 1: Data layer ───────────────────────────────────────────────────
+  const historical    = require('./data/historical');
+  const optionsChain  = require('./data/options-chain');
+  const tickStream    = require('./data/tick-stream');
+  require('./data/candle-builder');   // wires TICK_RECEIVED listener
+  require('./data/indicator-engine'); // wires CANDLE_CLOSE_* listeners
+
+  // Step 6a: Fetch startup candle history (seeds CandleBuilder before tick stream opens)
+  await historical.fetch();
+  log('INFO', 'Historical', 'Startup candles loaded');
+
+  // Step 6b: Start options chain polling
+  optionsChain.start();
+  log('INFO', 'OptionsChain', `Polling every ${config.OPTIONS_CHAIN_INTERVAL}m`);
+
+  // Step 6c: Start tick stream (NSE polling or Dhan WS based on DATA_SOURCE config)
+  tickStream.start();
+  log('INFO', 'TickStream', `Starting tick stream (DATA_SOURCE=${config.DATA_SOURCE})`);
+
+  // ── Step 7: System ready ──────────────────────────────────────────────────
   // Phase 2: init position tracker, paper executor, Telegram bot, dashboard server, cron jobs
 
   return { circuitBreaker, sessionContext, registry };
