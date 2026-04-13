@@ -385,6 +385,41 @@ await test('T27 Historical: seeds CandleBuilder from cache when HTTP sources fai
   assert(seeded === 10, `Expected 10 candles seeded from cache, got ${seeded}`);
 });
 
+// ── T28: OptionsChain parser produces correct shape from fake NSE response ────
+await test('T28 OptionsChain: _parseOptionChain() produces correct shape from fake NSE JSON', async () => {
+  resetModules('./data/options-chain');
+  const oc = require('./data/options-chain');
+
+  // Minimal fake NSE option chain response
+  const fakeNSE = {
+    records: {
+      underlyingValue: 24185.3,
+      expiryDates: ['24-Apr-2025', '01-May-2025'],
+      data: [
+        { expiryDate: '24-Apr-2025', strikePrice: 24000, CE: { openInterest: 50000, impliedVolatility: 12 }, PE: { openInterest: 30000, impliedVolatility: 11 } },
+        { expiryDate: '24-Apr-2025', strikePrice: 24500, CE: { openInterest: 120000, impliedVolatility: 10 }, PE: { openInterest: 20000, impliedVolatility: 10 } },
+        { expiryDate: '24-Apr-2025', strikePrice: 23800, CE: { openInterest: 15000, impliedVolatility: 13 }, PE: { openInterest: 110000, impliedVolatility: 12 } },
+        { expiryDate: '01-May-2025', strikePrice: 24500, CE: { openInterest: 80000, impliedVolatility: 11 }, PE: { openInterest: 60000, impliedVolatility: 11 } },
+      ],
+    },
+    filtered: {
+      CE: { totOI: 185000 },
+      PE: { totOI: 160000 },
+    },
+  };
+
+  const result = oc._parseOptionChain(fakeNSE);
+
+  assert(result.symbol          === 'NIFTY',     'symbol should be NIFTY');
+  assert(result.expiry          === '24-Apr-2025','expiry should be nearest weekly');
+  assert(result.underlyingValue === 24185.3,      'underlyingValue should match');
+  assert(result.maxCeOiStrike   === 24500,        `maxCeOiStrike: expected 24500, got ${result.maxCeOiStrike}`);
+  assert(result.maxPeOiStrike   === 23800,        `maxPeOiStrike: expected 23800, got ${result.maxPeOiStrike}`);
+  assert(typeof result.pcr      === 'number',     'pcr should be a number');
+  assert(result.pcr > 0,                          'pcr should be positive');
+  assert(typeof result.timestamp === 'string',    'timestamp should be a string');
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests — ${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
