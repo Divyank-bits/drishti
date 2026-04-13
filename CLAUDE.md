@@ -41,11 +41,14 @@ Each phase is only started after the user explicitly confirms the previous phase
   iron-condor.strategy.js
 
 /data
-  tick-stream.js        ← Dhan WebSocket feed
+  tick-stream.js        ← factory: selects source based on DATA_SOURCE config
   candle-builder.js     ← 1m/5m/15m OHLCV from ticks
   historical.js         ← startup candle fetch with fallback chain
   options-chain.js      ← NSE option chain fetcher
   indicator-engine.js   ← technicalindicators wrapper
+  /sources
+    nse-source.js       ← NSE LTP polling (Phase 1, DATA_SOURCE=NSE)
+    dhan-source.js      ← Dhan WebSocket feed (Phase 3, DATA_SOURCE=DHAN)
 
 /execution
   order-executor.js     ← abstract base interface
@@ -126,6 +129,16 @@ The execution path below the `strategy-selector.js` is **identical regardless of
 ### 6. Executor Abstraction
 `PaperExecutor` and `DhanExecutor` implement the same interface defined in `order-executor.js`. All logic above the executor layer is identical. Switching live/paper = one config flag change.
 
+### 8. Data Source Abstraction
+`DATA_SOURCE` and `EXECUTION_MODE` are independent config axes. You can paper-trade with Dhan live data (pre-live validation), or use NSE polling in paper mode (no subscription needed).
+
+`tick-stream.js` is a factory that loads the correct source module. Each source in `data/sources/` emits identical `TICK_RECEIVED` events — nothing downstream knows or cares which source is active.
+
+- `DATA_SOURCE: "NSE"` — NSE LTP polling every 3–5s (no paid subscription, Phase 1)
+- `DATA_SOURCE: "DHAN"` — Dhan WebSocket feed (requires paid Data API subscription, Phase 3)
+
+`historical.js` and `options-chain.js` branch internally on `DATA_SOURCE` via isolated `_fetchFromNSE()` / `_fetchFromDhan()` methods (Phase 3 adds the Dhan methods).
+
 ### 7. Immutable Trade Journal
 `trade-journal.js` is append-only. Never modify existing entries. Every event written includes `{ timestamp, eventType, data }`.
 
@@ -138,6 +151,8 @@ All of these must exist. Secrets come from `.env`.
 ```js
 INTELLIGENCE_MODE: "HYBRID"     // "AI" | "RULES" | "HYBRID"
 EXECUTION_MODE: "PAPER"         // "PAPER" | "LIVE"
+DATA_SOURCE: "NSE"              // "NSE" | "DHAN" — independent of EXECUTION_MODE
+                                // NSE = polling, no subscription; DHAN = WebSocket, requires paid plan
 MARKET_OPEN: "09:15"
 MARKET_CLOSE: "15:30"
 NO_NEW_TRADES_AFTER: "14:00"

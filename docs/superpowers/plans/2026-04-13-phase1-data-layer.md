@@ -4,9 +4,11 @@
 
 **Goal:** Build the complete data pipeline — tick stream, candle building, indicator computation, NSE option chain, and session context wiring — so Phase 2 has live market data to consume.
 
-**Architecture:** Pure event chain. Dhan WebSocket → `TICK_RECEIVED` → CandleBuilder → `CANDLE_CLOSE_*` → IndicatorEngine → `INDICATORS_UPDATED`. OptionsChain runs independently on a 15m cron. SessionContext listens to all upstream events. IndicatorEngine may call `candleBuilder.getBuffer()` directly — both live in the `data/` domain, this is an intra-domain read, not a cross-domain command.
+**Architecture:** Pure event chain. NSE LTP polling (`DATA_SOURCE=NSE`) → `TICK_RECEIVED` → CandleBuilder → `CANDLE_CLOSE_*` → IndicatorEngine → `INDICATORS_UPDATED`. OptionsChain runs independently on a 15m cron. SessionContext listens to all upstream events. IndicatorEngine may call `candleBuilder.getBuffer()` directly — both live in the `data/` domain, this is an intra-domain read, not a cross-domain command.
 
-**Tech Stack:** `ws` (WebSocket), `axios` (HTTP), `dayjs` (time math), `technicalindicators` (RSI/EMA/MACD/BB/ATR/ADX), `black-scholes` (delta), `node-cron` (options chain polling)
+`tick-stream.js` is a factory: it loads `data/sources/nse-source.js` (Phase 1) or `data/sources/dhan-source.js` (Phase 3) based on `DATA_SOURCE` config. `DATA_SOURCE` and `EXECUTION_MODE` are independent — enabling paper trading with Dhan live data in Phase 3 pre-live validation.
+
+**Tech Stack:** `axios` (HTTP), `dayjs` (time math), `technicalindicators` (RSI/EMA/MACD/BB/ATR/ADX), `black-scholes` (delta), `node-cron` (options chain polling)
 
 ---
 
@@ -14,12 +16,14 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `config.js` | Modify | Add `STARTUP_CANDLE_COUNT: 50` |
+| `config.js` | Modify | Add `STARTUP_CANDLE_COUNT: 50`, `DATA_SOURCE: 'NSE'` |
 | `data/candle-builder.js` | Create | Tick → OHLCV aggregation, rolling buffers |
 | `data/indicator-engine.js` | Create | Candle buffers → RSI/EMA/MACD/BB/ATR/ADX/delta |
 | `data/historical.js` | Create | Boot-time 15m candle fetch (NSE → Yahoo → cache) |
 | `data/options-chain.js` | Create | NSE option chain cron, cookie refresh, PCR/OI parsing |
-| `data/tick-stream.js` | Create | Dhan WebSocket, reconnect, proactive token renewal |
+| `data/tick-stream.js` | Create | Factory: loads nse-source or dhan-source based on DATA_SOURCE |
+| `data/sources/nse-source.js` | Create | NSE LTP polling every 3s, emits TICK_RECEIVED |
+| `data/sources/dhan-source.js` | Create | Phase 3 stub — throws if DATA_SOURCE=DHAN is used |
 | `core/session-context.js` | Modify | Wire `_hookEvents()` + call it from constructor |
 | `index.js` | Modify | Add Phase 1 boot steps |
 | `test-phase1.js` | Create | 13 tests (T16–T28), synthetic data only |
@@ -38,11 +42,13 @@
 
 - [ ] **Step 1: Add `STARTUP_CANDLE_COUNT` to config.js**
 
-In `config.js`, find the `CANDLE_HISTORY_SIZE` line and add one line after it:
+In `config.js`, find the `CANDLE_HISTORY_SIZE` line and add two lines after it:
 
 ```js
   CANDLE_HISTORY_SIZE: 200,       // rolling candles kept in memory per timeframe
   STARTUP_CANDLE_COUNT: 50,       // candles fetched at boot; bump to 200 for deep scans
+  DATA_SOURCE: process.env.DATA_SOURCE || 'NSE', // 'NSE' | 'DHAN' — independent of EXECUTION_MODE
+                                                  // NSE = polling, no subscription; DHAN = WebSocket (Phase 3)
 ```
 
 - [ ] **Step 2: Create `data/cache/` directory with a `.gitkeep`**
@@ -63,16 +69,16 @@ data/cache/*.json
 - [ ] **Step 4: Verify config loads**
 
 ```bash
-node -e "const c = require('./config'); console.log('STARTUP_CANDLE_COUNT:', c.STARTUP_CANDLE_COUNT)"
+node -e "const c = require('./config'); console.log('STARTUP_CANDLE_COUNT:', c.STARTUP_CANDLE_COUNT, '| DATA_SOURCE:', c.DATA_SOURCE)"
 ```
 
-Expected output: `STARTUP_CANDLE_COUNT: 50`
+Expected output: `STARTUP_CANDLE_COUNT: 50 | DATA_SOURCE: NSE`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add config.js .gitignore data/cache/.gitkeep
-git commit -m "feat: add STARTUP_CANDLE_COUNT config and data/cache directory"
+git commit -m "feat: add STARTUP_CANDLE_COUNT, DATA_SOURCE config and data/cache directory"
 ```
 
 ---
@@ -1307,195 +1313,187 @@ git commit -m "feat: add OptionsChain with NSE parser and T28 passing"
 
 ---
 
-## Task 7: TickStream (Dhan WebSocket + token renewal)
+## Task 7: TickStream factory + NSE source + Dhan stub
 
-No automated tests — verified manually when the Dhan WebSocket is live.
+No automated tests — `nse-source.js` verified manually during market hours. `dhan-source.js` verified in Phase 3.
 
 **Files:**
 - Create: `data/tick-stream.js`
+- Create: `data/sources/nse-source.js`
+- Create: `data/sources/dhan-source.js`
 
-- [ ] **Step 1: Create `data/tick-stream.js`**
+- [ ] **Step 1: Create `data/sources/` directory**
+
+```bash
+mkdir -p data/sources
+```
+
+- [ ] **Step 2: Create `data/tick-stream.js`**
 
 ```javascript
 /**
  * @file tick-stream.js
- * @description Connects to Dhan WebSocket feed for NIFTY live ticks.
- *              Emits TICK_RECEIVED on every price update.
- *              Handles reconnects with exponential backoff.
- *              Renews Dhan access token proactively 1 hour before expiry.
- *
- * NOTE: Dhan WebSocket binary packet format — verify byte offsets against
- * https://dhanhq.co/docs/v2/live-market-feed/ if ticks appear malformed.
+ * @description Factory: loads the correct market data source based on DATA_SOURCE config.
+ *              DATA_SOURCE='NSE'  → data/sources/nse-source.js  (Phase 1, polling)
+ *              DATA_SOURCE='DHAN' → data/sources/dhan-source.js (Phase 3, WebSocket)
+ *              All sources emit identical TICK_RECEIVED events — nothing downstream
+ *              knows or cares which source is active.
  */
 
 'use strict';
 
-const WebSocket = require('ws');
-const axios     = require('axios');
-const eventBus  = require('../core/event-bus');
-const EVENTS    = require('../core/events');
-const config    = require('../config');
+const config = require('../config');
 
-// NIFTY 50 index on Dhan: ExchangeSegment IDX_I, SecurityId 13
-const NIFTY_SECURITY_ID  = '13';
-const NIFTY_EXCHANGE_SEG = 'IDX_I';
-const WS_URL             = 'wss://api-feed.dhan.co';
-const DHAN_RENEW_URL     = 'https://api.dhan.co/v2/RenewToken';
+if (config.DATA_SOURCE === 'DHAN') {
+  module.exports = require('./sources/dhan-source');
+} else {
+  module.exports = require('./sources/nse-source');
+}
+```
 
-const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000]; // exponential backoff
-const HEARTBEAT_INTERVAL  = 30000; // 30s
-const MAX_RECONNECT_TRIES = 5;
+- [ ] **Step 3: Create `data/sources/nse-source.js`**
+
+```javascript
+/**
+ * @file nse-source.js
+ * @description Polls NSE for NIFTY LTP every 3 seconds during market hours.
+ *              Emits TICK_RECEIVED {symbol, ltp, volume:0, timestamp} on each poll.
+ *              Used when DATA_SOURCE='NSE' (default, no paid subscription required).
+ *
+ *              Volume is 0 — NSE quote endpoint does not return volume.
+ *              Anti-hunt volume rules will treat 0-volume ticks as "data unavailable"
+ *              and fall back to candle-level volume (Phase 2).
+ */
+
+'use strict';
+
+const axios    = require('axios');
+const eventBus = require('../../core/event-bus');
+const EVENTS   = require('../../core/events');
+
+const NSE_BASE   = 'https://www.nseindia.com';
+const NSE_QUOTE  = `${NSE_BASE}/api/quote-equity?symbol=NIFTY%2050`;
+const UA         = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+const POLL_MS    = 3000;  // 3 second polling interval
+
+// Market hours in UTC (IST - 5:30)
+const MARKET_OPEN_UTC_H  = 3;   // 09:15 IST
+const MARKET_OPEN_UTC_M  = 45;
+const MARKET_CLOSE_UTC_H = 10;  // 15:30 IST
+const MARKET_CLOSE_UTC_M = 0;
+
+// Consecutive failure threshold before emitting WEBSOCKET_RECONNECT_FAILED
+// 10 polls × 3s = 30s — matches WEBSOCKET_RECONNECT_TIMEOUT in config
+const MAX_FAILURES = 10;
 
 function log(level, msg) {
   const ts = new Date().toTimeString().slice(0, 8);
-  console.log(`[${ts}] [TickStream] [${level}] ${msg}`);
+  console.log(`[${ts}] [NseSource] [${level}] ${msg}`);
 }
 
-class TickStream {
+class NseSource {
   constructor() {
-    this._ws              = null;
-    this._reconnectCount  = 0;
-    this._heartbeatTimer  = null;
-    this._renewalTimer    = null;
-    this._accessToken     = config.DHAN_ACCESS_TOKEN;
+    this._cookie          = null;
+    this._timer           = null;
+    this._failureCount    = 0;
+    this._connectedEmitted = false;
   }
 
   start() {
-    this._scheduleTokenRenewal();
-    this._connect();
+    log('INFO', `Starting NSE LTP polling every ${POLL_MS / 1000}s`);
+    this._timer = setInterval(() => this._poll(), POLL_MS);
   }
 
   stop() {
-    clearTimeout(this._renewalTimer);
-    clearInterval(this._heartbeatTimer);
-    if (this._ws) this._ws.terminate();
+    clearInterval(this._timer);
+    this._timer = null;
+    log('INFO', 'NSE polling stopped');
   }
 
-  _connect() {
-    const url = `${WS_URL}?version=2&token=${this._accessToken}&clientId=${config.DHAN_CLIENT_ID}&authType=2`;
-    this._ws  = new WebSocket(url);
-
-    this._ws.on('open',    ()      => this._onOpen());
-    this._ws.on('message', (data)  => this._onMessage(data));
-    this._ws.on('close',   (code)  => this._onClose(code));
-    this._ws.on('error',   (err)   => log('ERROR', `WebSocket error: ${err.message}`));
+  _isDuringMarketHours() {
+    const now = new Date();
+    const h   = now.getUTCHours();
+    const m   = now.getUTCMinutes();
+    const after  = h > MARKET_OPEN_UTC_H  || (h === MARKET_OPEN_UTC_H  && m >= MARKET_OPEN_UTC_M);
+    const before = h < MARKET_CLOSE_UTC_H || (h === MARKET_CLOSE_UTC_H && m <= MARKET_CLOSE_UTC_M);
+    return after && before;
   }
 
-  _onOpen() {
-    log('INFO', 'WebSocket connected');
-    this._reconnectCount = 0;
-    this._startHeartbeat();
-    this._subscribe();
-    eventBus.emit(EVENTS.WEBSOCKET_CONNECTED, { timestamp: Date.now() });
-  }
+  async _poll() {
+    if (!this._isDuringMarketHours()) return;
 
-  _subscribe() {
-    const msg = JSON.stringify({
-      RequestCode:     15,
-      InstrumentCount: 1,
-      InstrumentList:  [{ ExchangeSegment: NIFTY_EXCHANGE_SEG, SecurityId: NIFTY_SECURITY_ID }],
-    });
-    this._ws.send(msg);
-    log('INFO', 'Subscribed to NIFTY feed');
-  }
-
-  _onMessage(data) {
-    // Dhan sends binary packets for market data.
-    // Packet layout (LTP mode, RequestCode 15):
-    //   Byte  0:     Feed Request Code (uint8)
-    //   Byte  1:     Message Length    (uint8)
-    //   Bytes 2–5:   Security ID       (uint32 BE)
-    //   Bytes 6–9:   LTP × 100         (uint32 BE — divide by 100 to get price)
-    //   Bytes 10–13: Volume            (uint32 BE)
-    //   Bytes 14–17: Unix timestamp    (uint32 BE — seconds)
-    // Verify against Dhan API docs if prices appear incorrect.
     try {
-      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      if (buf.length < 18) return; // skip handshake/auth frames
+      if (!this._cookie) await this._refreshCookie();
 
-      const ltp       = buf.readUInt32BE(6) / 100;
-      const volume    = buf.readUInt32BE(10);
-      const timestamp = buf.readUInt32BE(14) * 1000; // convert to ms
+      const res = await axios.get(NSE_QUOTE, {
+        headers: { 'User-Agent': UA, 'Referer': NSE_BASE, 'Cookie': this._cookie },
+        timeout: 5000,
+      });
 
-      if (ltp <= 0) return; // filter invalid frames
+      const ltp = res.data?.priceInfo?.lastPrice;
+      if (!ltp || ltp <= 0) throw new Error('Invalid LTP in response');
+
+      this._failureCount = 0;
+
+      if (!this._connectedEmitted) {
+        eventBus.emit(EVENTS.WEBSOCKET_CONNECTED, { timestamp: Date.now() });
+        this._connectedEmitted = true;
+        log('INFO', 'First successful poll — WEBSOCKET_CONNECTED emitted');
+      }
 
       eventBus.emit(EVENTS.TICK_RECEIVED, {
-        symbol: 'NIFTY',
+        symbol:    'NIFTY',
         ltp,
-        volume,
-        timestamp,
-      });
-    } catch (err) {
-      log('WARN', `Failed to parse tick: ${err.message}`);
-    }
-  }
-
-  _onClose(code) {
-    clearInterval(this._heartbeatTimer);
-    log('WARN', `WebSocket closed (code ${code})`);
-    eventBus.emit(EVENTS.WEBSOCKET_DISCONNECTED, { code, timestamp: Date.now() });
-    this._scheduleReconnect();
-  }
-
-  _scheduleReconnect() {
-    if (this._reconnectCount >= MAX_RECONNECT_TRIES) {
-      log('ERROR', `Failed to reconnect after ${MAX_RECONNECT_TRIES} attempts`);
-      eventBus.emit(EVENTS.WEBSOCKET_RECONNECT_FAILED, { timestamp: Date.now() });
-      return;
-    }
-    const delayMs = RECONNECT_DELAYS_MS[this._reconnectCount] || 30000;
-    log('INFO', `Reconnecting in ${delayMs / 1000}s (attempt ${this._reconnectCount + 1})`);
-    setTimeout(() => {
-      this._reconnectCount++;
-      this._connect();
-    }, delayMs);
-  }
-
-  _startHeartbeat() {
-    clearInterval(this._heartbeatTimer);
-    this._heartbeatTimer = setInterval(() => {
-      if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-        this._ws.ping();
-      }
-    }, HEARTBEAT_INTERVAL);
-  }
-
-  _scheduleTokenRenewal() {
-    // Dhan token expiry is not returned in any field — assume 23h validity
-    // and renew 1h before that (i.e., 22h after start or last renewal).
-    const renewAfterMs = 22 * 60 * 60 * 1000;
-    this._renewalTimer = setTimeout(() => this._renewToken(), renewAfterMs);
-    log('INFO', 'Token renewal scheduled in 22h');
-  }
-
-  async _renewToken() {
-    try {
-      const res = await axios.post(
-        DHAN_RENEW_URL,
-        { token: this._accessToken },
-        { headers: { 'access-token': this._accessToken, 'dhan-client-id': config.DHAN_CLIENT_ID } }
-      );
-      this._accessToken = res.data.accessToken || res.data.token || this._accessToken;
-      log('INFO', 'Access token renewed successfully');
-      // Reconnect WebSocket with new token
-      if (this._ws) this._ws.terminate();
-      this._connect();
-      // Schedule next renewal
-      this._scheduleTokenRenewal();
-    } catch (err) {
-      log('ERROR', `Token renewal failed: ${err.message} — WebSocket will use current token`);
-      eventBus.emit(EVENTS.WEBSOCKET_RECONNECT_FAILED, {
-        reason: `token renewal failed: ${err.message}`,
+        volume:    0,
         timestamp: Date.now(),
       });
+    } catch (err) {
+      this._cookie = null; // force cookie refresh next poll
+      this._failureCount++;
+      log('WARN', `Poll failed (${this._failureCount}/${MAX_FAILURES}): ${err.message}`);
+
+      if (this._failureCount >= MAX_FAILURES) {
+        log('ERROR', `${MAX_FAILURES} consecutive failures — emitting WEBSOCKET_RECONNECT_FAILED`);
+        eventBus.emit(EVENTS.WEBSOCKET_RECONNECT_FAILED, {
+          reason:    `NSE polling failed ${MAX_FAILURES} times consecutively`,
+          timestamp: Date.now(),
+        });
+        this._failureCount = 0; // reset so circuit breaker (not this module) decides next step
+      }
     }
+  }
+
+  async _refreshCookie() {
+    const r = await axios.get(NSE_BASE, {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
+      timeout: 8000,
+    });
+    this._cookie = (r.headers['set-cookie'] || []).join('; ');
   }
 }
 
-module.exports = new TickStream();
+module.exports = new NseSource();
 ```
 
-- [ ] **Step 2: Verify module loads without error**
+- [ ] **Step 4: Create `data/sources/dhan-source.js`** (Phase 3 stub)
+
+```javascript
+/**
+ * @file dhan-source.js
+ * @description Phase 3 stub. Dhan WebSocket feed for NIFTY live ticks.
+ *              Requires active Dhan Data API subscription (₹499/month).
+ *              Full implementation added in Phase 3.
+ */
+
+'use strict';
+
+throw new Error(
+  '[DhanSource] DATA_SOURCE=DHAN is not yet implemented. ' +
+  'Set DATA_SOURCE=NSE in your .env or config.js to use NSE polling.'
+);
+```
+
+- [ ] **Step 5: Verify modules load without error**
 
 ```bash
 node -e "require('./data/tick-stream'); console.log('tick-stream loaded OK')"
@@ -1503,7 +1501,7 @@ node -e "require('./data/tick-stream'); console.log('tick-stream loaded OK')"
 
 Expected: `tick-stream loaded OK` (no errors)
 
-- [ ] **Step 3: Run full test suite — still 13 passing**
+- [ ] **Step 6: Run full test suite — still 13 passing**
 
 ```bash
 node test-phase1.js
@@ -1511,11 +1509,11 @@ node test-phase1.js
 
 Expected: `13 tests — 13 passed, 0 failed`
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add data/tick-stream.js
-git commit -m "feat: add TickStream with Dhan WebSocket reconnect and proactive token renewal"
+git add data/tick-stream.js data/sources/nse-source.js data/sources/dhan-source.js
+git commit -m "feat: add TickStream factory with NSE polling source and Phase 3 Dhan stub"
 ```
 
 ---
@@ -1545,9 +1543,9 @@ Find the comment `// Phase 1: init tick stream, historical fetch, options chain,
   optionsChain.start();
   log('INFO', 'OptionsChain', `Polling every ${config.OPTIONS_CHAIN_INTERVAL}m`);
 
-  // Step 6c: Connect to Dhan WebSocket (starts emitting TICK_RECEIVED)
+  // Step 6c: Start tick stream (NSE polling or Dhan WS based on DATA_SOURCE config)
   tickStream.start();
-  log('INFO', 'TickStream', 'Dhan WebSocket connecting...');
+  log('INFO', 'TickStream', `Starting tick stream (DATA_SOURCE=${config.DATA_SOURCE})`);
 ```
 
 Also renumber the SYSTEM_READY step comment from `Step 6` to `Step 7`:

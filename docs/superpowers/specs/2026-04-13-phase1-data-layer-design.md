@@ -24,6 +24,7 @@ Phase 0 gate: 16/16 tests pass. Dhan API connectivity confirmed. Telegram two-wa
 | Token renewal | Proactive cron 1h before expiry — no reactive retry loop |
 | NSE cookie failure | Silent single retry, then `OPTIONS_CHAIN_STALE` + Telegram alert |
 | Options chain source | NSE India primary, clean `_fetchFromNSE()` interface for future Dhan swap |
+| Tick source | NSE LTP polling (Phase 1). `DATA_SOURCE` flag is independent of `EXECUTION_MODE` — enables paper trading with Dhan live data in Phase 3 pre-live validation. |
 | Test strategy | Synthetic tick injection only — no live API mocks |
 
 ---
@@ -41,7 +42,9 @@ BOOT
       Writes successful fetch to data/cache/nifty-15m.json
 
 MARKET OPEN
- └─ tick-stream.js (Dhan WebSocket)
+ └─ tick-stream.js (factory — loads source from DATA_SOURCE config)
+      │  DATA_SOURCE=NSE  → data/sources/nse-source.js  (Phase 1: polls NSE LTP every 3s)
+      │  DATA_SOURCE=DHAN → data/sources/dhan-source.js (Phase 3: Dhan WebSocket)
       │  emits TICK_RECEIVED {symbol, ltp, timestamp, volume}
       │
       ▼
@@ -71,25 +74,63 @@ MARKET OPEN
 
 ### `data/tick-stream.js`
 
-Connects to Dhan WebSocket feed. Emits `TICK_RECEIVED` for every NIFTY price update.
+Factory module. Loads the correct source based on `DATA_SOURCE` config. Emits no events itself — delegates entirely to the source module.
+
+```js
+// tick-stream.js
+if (config.DATA_SOURCE === 'DHAN') {
+  module.exports = require('./sources/dhan-source'); // Phase 3
+} else {
+  module.exports = require('./sources/nse-source');  // Phase 1 default
+}
+```
+
+**Emitted events (via source):** `TICK_RECEIVED`, `WEBSOCKET_CONNECTED`, `WEBSOCKET_DISCONNECTED`, `WEBSOCKET_RECONNECTED`, `WEBSOCKET_RECONNECT_FAILED`
+
+---
+
+### `data/sources/nse-source.js` (Phase 1)
+
+Polls NSE for NIFTY LTP every 3 seconds during market hours (09:15–15:30 IST). Uses the same NSE session cookie mechanism as `options-chain.js`. Emits `TICK_RECEIVED` on each successful poll.
+
+**Poll behavior:**
+- `setInterval` at 3000ms, market hours only
+- LTP sourced from NSE quote endpoint (`/api/quote-equity?symbol=NIFTY%2050`)
+- Emits `WEBSOCKET_CONNECTED` on first successful poll (signals system is receiving data)
+- On consecutive failures (>30s = 10 polls): emits `WEBSOCKET_RECONNECT_FAILED`
+- Volume field set to `0` (not available from NSE quote endpoint)
+
+**Why NSE polling works for Iron Condor:**
+- Candle close detection uses epoch math — accurate to the minute, 3s polling is sufficient
+- Anti-hunt logic operates on 15m candle closes, not sub-second ticks
+- No HFT precision required for paper trading
+
+---
+
+### `data/sources/dhan-source.js` (Phase 3 — stub only in Phase 1)
+
+Connects to Dhan WebSocket feed. Requires active Dhan Data API subscription (₹499/month).
 
 **Dhan WebSocket:**
 - URL: `wss://api-feed.dhan.co`
-- Auth headers: `access-token`, `dhan-client-id`
-- Subscribes to NIFTY index feed post-connect
+- Auth params: `token`, `clientId`, `authType=2` in query string
+- Subscribes to NIFTY index feed post-connect (SecurityId: 13, ExchangeSegment: IDX_I)
 - Heartbeat ping every 30s
 
 **Reconnect logic:**
 - Exponential backoff: 1s → 2s → 4s → 8s → max 30s
 - After 5 failed attempts: emit `WEBSOCKET_RECONNECT_FAILED`
-- On success: emit `WEBSOCKET_RECONNECTED`, re-subscribe
 
 **Token renewal:**
-- On boot: parse token expiry, schedule cron for `expiry - 1 hour`
-- Cron calls Dhan `/v2/RenewToken`, reconnects WebSocket with new token
-- On renewal failure: log ERROR, emit `WEBSOCKET_RECONNECT_FAILED` (circuit breaker #4 watches WebSocket down >30s independently)
+- `setTimeout` fires 22h after boot (Dhan token validity ~23h)
+- Calls Dhan `/v2/RenewToken`, reconnects WebSocket with new token
+- On renewal failure: log ERROR, emit `WEBSOCKET_RECONNECT_FAILED`
 
-**Emitted events:** `TICK_RECEIVED`, `WEBSOCKET_CONNECTED`, `WEBSOCKET_DISCONNECTED`, `WEBSOCKET_RECONNECTED`, `WEBSOCKET_RECONNECT_FAILED`
+**Phase 1 stub:**
+```js
+// dhan-source.js — Phase 3 implementation pending
+throw new Error('[TickStream] DATA_SOURCE=DHAN not yet implemented. Set DATA_SOURCE=NSE.');
+```
 
 ---
 
@@ -287,7 +328,8 @@ Cache directory: `data/cache/` (git-ignored).
 
 1. **NSE cookie** — most brittle piece. Cookie expires 30–60 min. Silent retry covers normal rotation. If NSE changes their endpoint or adds bot detection, options chain will stale.
 2. **Yahoo Finance** — unofficial API, no SLA. Used only as historical fallback at boot.
-3. **Dhan token** — expires 24h. Proactive renewal cron mitigates. If renewal API changes, WebSocket feed dies silently until restart.
+3. **NSE LTP polling** — same cookie fragility as options chain. If NSE rate-limits or changes the quote endpoint, tick stream stalls. For Phase 3, switching to `DATA_SOURCE=DHAN` eliminates this.
+4. **Dhan token** (Phase 3 only) — expires 24h. Proactive renewal cron mitigates. If renewal API changes, WebSocket feed dies silently until restart.
 
 ---
 
