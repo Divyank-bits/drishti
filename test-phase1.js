@@ -292,6 +292,63 @@ await test('T24 IndicatorEngine: returns null for all indicators when buffer < m
   assert(received.indicators.atr  === null, 'ATR should be null  (need 15, have 5)');
 });
 
+// ── T25: dayOpen set once, dayHigh/dayLow track running extremes ──────────────
+await test('T25 SessionContext: dayOpen set on first tick only, high/low track all ticks', async () => {
+  resetModules('./core/session-context');
+  const eventBus = require('./core/event-bus');
+  const EVENTS   = require('./core/events');
+  const SessionContext = require('./core/session-context');
+  const ctx = new SessionContext();
+
+  eventBus.emit(EVENTS.TICK_RECEIVED, { ltp: 24100, volume: 100, timestamp: Date.now() });
+  assert(ctx.snapshot().dayOpen === 24100, 'dayOpen should be 24100 after first tick');
+
+  eventBus.emit(EVENTS.TICK_RECEIVED, { ltp: 24200, volume: 100, timestamp: Date.now() });
+  assert(ctx.snapshot().dayOpen  === 24100, 'dayOpen must not change on second tick');
+  assert(ctx.snapshot().dayHigh  === 24200, `dayHigh should be 24200, got ${ctx.snapshot().dayHigh}`);
+  assert(ctx.snapshot().dayLow   === 24100, `dayLow should be 24100, got ${ctx.snapshot().dayLow}`);
+});
+
+// ── T26: firstHourComplete set at 10:15 IST candle ───────────────────────────
+await test('T26 SessionContext: firstHourComplete set true at 10:15 IST candle close', async () => {
+  resetModules('./core/session-context');
+  const eventBus = require('./core/event-bus');
+  const EVENTS   = require('./core/events');
+  const SessionContext = require('./core/session-context');
+  const ctx = new SessionContext();
+
+  // 09:15 IST = 03:45 UTC
+  const c0915 = {
+    open: 24100, high: 24150, low: 24080, close: 24120, volume: 1000,
+    openTime: new Date('2025-04-13T03:45:00.000Z').getTime(),
+  };
+  eventBus.emit(EVENTS.CANDLE_CLOSE_1M, c0915);
+  assert(!ctx.snapshot().firstHourComplete, 'firstHourComplete must be false at 09:15');
+
+  // 10:14 IST = 04:44 UTC
+  const c1014 = {
+    open: 24200, high: 24250, low: 24180, close: 24220, volume: 1000,
+    openTime: new Date('2025-04-13T04:44:00.000Z').getTime(),
+  };
+  eventBus.emit(EVENTS.CANDLE_CLOSE_1M, c1014);
+  assert(!ctx.snapshot().firstHourComplete, 'firstHourComplete must be false at 10:14');
+
+  // 10:15 IST = 04:45 UTC — triggers completion
+  const c1015 = {
+    open: 24220, high: 24270, low: 24210, close: 24250, volume: 1000,
+    openTime: new Date('2025-04-13T04:45:00.000Z').getTime(),
+  };
+  eventBus.emit(EVENTS.CANDLE_CLOSE_1M, c1015);
+  assert(ctx.snapshot().firstHourComplete, 'firstHourComplete must be true at 10:15');
+
+  // Verify firstHourHigh and firstHourLow were tracked
+  const snap = ctx.snapshot();
+  // c1015 is NOT in first-hour range (inFirstHour checks minute < 15, so 10:15 is excluded)
+  // firstHourHigh = max(24150 from c0915, 24250 from c1014) = 24250
+  assert(snap.firstHourHigh === 24250, `firstHourHigh: expected 24250, got ${snap.firstHourHigh}`);
+  assert(snap.firstHourLow  === 24080, `firstHourLow: expected 24080, got ${snap.firstHourLow}`);
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests — ${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

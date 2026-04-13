@@ -12,6 +12,7 @@ const EVENTS = require('./events');
 class SessionContext {
   constructor() {
     this._data = this._defaultData();
+    this._hookEvents();
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
@@ -61,14 +62,45 @@ class SessionContext {
   }
 
   /**
-   * Stubs for Phase 1 event hooks.
+   * Wires event bus listeners for Phase 1 data layer events.
    * @private
    */
   _hookEvents() {
-    // Phase 1: hook CANDLE_CLOSE_1M → track firstHourHigh / firstHourLow
-    // Phase 1: hook INDICATORS_UPDATED → update vixCurrent
+    // IST offset helper — avoids timezone dependency on host machine
+    const toIST = (ts) => {
+      const istMs = ts + 5.5 * 60 * 60 * 1000;
+      return {
+        hour:   Math.floor((istMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000)),
+        minute: Math.floor((istMs % (60 * 60 * 1000))      / (60 * 1000)),
+      };
+    };
+
+    eventBus.on(EVENTS.TICK_RECEIVED, ({ ltp }) => {
+      if (this._data.dayOpen === null)                              this._data.dayOpen = ltp;
+      if (this._data.dayHigh === null || ltp > this._data.dayHigh) this._data.dayHigh = ltp;
+      if (this._data.dayLow  === null || ltp < this._data.dayLow)  this._data.dayLow  = ltp;
+    });
+
+    eventBus.on(EVENTS.CANDLE_CLOSE_1M, ({ openTime, high, low }) => {
+      const { hour, minute } = toIST(openTime);
+      // Track first-hour highs/lows for candles starting at 09:15–10:14 IST
+      const inFirstHour = (hour === 9 && minute >= 15) || (hour === 10 && minute < 15);
+      if (inFirstHour) {
+        if (this._data.firstHourHigh === null || high > this._data.firstHourHigh)
+          this._data.firstHourHigh = high;
+        if (this._data.firstHourLow  === null || low  < this._data.firstHourLow)
+          this._data.firstHourLow  = low;
+      }
+      // Mark first hour complete when the 10:15 IST candle closes
+      if (hour === 10 && minute === 15) this._data.firstHourComplete = true;
+    });
+
+    eventBus.on(EVENTS.OPTIONS_CHAIN_UPDATED, ({ vix }) => {
+      if (this._data.vixAtOpen === null) this._data.vixAtOpen = vix;
+      this._data.vixCurrent = vix;
+    });
+
     // Phase 2: hook POSITION_CLOSED → update pnlToday, consecutiveLosses, wins/losses
-    // Implemented in their respective phases.
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
