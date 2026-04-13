@@ -349,6 +349,42 @@ await test('T26 SessionContext: firstHourComplete set true at 10:15 IST candle c
   assert(snap.firstHourLow  === 24080, `firstHourLow: expected 24080, got ${snap.firstHourLow}`);
 });
 
+// ── T27: Historical falls back to cache when HTTP sources fail ────────────────
+await test('T27 Historical: seeds CandleBuilder from cache when HTTP sources fail', async () => {
+  const fs   = require('fs');
+  const path = require('path');
+
+  resetModules('./data/historical', './data/candle-builder');
+  const cb = require('./data/candle-builder');
+
+  // Write a known fake cache file
+  const cachePath = path.join(__dirname, 'data/cache/nifty-15m.json');
+  const fakeCandles = Array.from({ length: 10 }, (_, i) => ({
+    open: 24000 + i, high: 24010 + i, low: 23990 + i,
+    close: 24000 + i, volume: 1000,
+    openTime: Date.now() - (10 - i) * 900000,
+  }));
+  fs.writeFileSync(cachePath, JSON.stringify(fakeCandles));
+
+  // Load historical with a fake HTTP client that always rejects
+  const historical = require('./data/historical');
+  historical._http = { get: () => Promise.reject(new Error('Simulated network failure')) };
+
+  let seeded = 0;
+  const origSeed = cb.seedBuffer.bind(cb);
+  cb.seedBuffer = (tf, candles) => {
+    if (tf === 15) seeded = candles.length;
+    origSeed(tf, candles);
+  };
+
+  await historical.fetch();
+
+  cb.seedBuffer = origSeed;
+  fs.unlinkSync(cachePath);
+
+  assert(seeded === 10, `Expected 10 candles seeded from cache, got ${seeded}`);
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests — ${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
