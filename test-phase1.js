@@ -123,6 +123,175 @@ await test('T19 CandleBuilder: buffer capped at 200, oldest entry dropped', asyn
   assert(buf[199].open === 24204, `Expected newest open 24204, got ${buf[199].open}`);
 });
 
+// ── T20: RSI correct from known series ────────────────────────────────────────
+await test('T20 IndicatorEngine: RSI correct from known price series', async () => {
+  resetModules('./data/candle-builder', './data/indicator-engine');
+  const cb  = require('./data/candle-builder');
+  require('./data/indicator-engine');       // wires its own listeners as side-effect
+  const eventBus = require('./core/event-bus');
+  const EVENTS   = require('./core/events');
+  const { RSI }  = require('technicalindicators');
+
+  const closes = [24000,24050,24020,24080,24060,24100,24090,24130,24110,24150,
+                  24140,24160,24130,24170,24155,24180,24160,24200,24185,24210];
+  const candles = closes.map((c, i) => ({
+    open: c - 10, high: c + 10, low: c - 20, close: c,
+    volume: 1000, openTime: Date.now() + i * 900000,
+  }));
+  cb.seedBuffer(15, candles);
+
+  const expArr = RSI.calculate({ values: closes, period: 14 });
+  const expected = expArr[expArr.length - 1];
+
+  let received = null;
+  eventBus.once(EVENTS.INDICATORS_UPDATED, (d) => { received = d; });
+  eventBus.emit(EVENTS.CANDLE_CLOSE_15M, candles[candles.length - 1]);
+
+  assert(received !== null, 'INDICATORS_UPDATED not emitted');
+  assert(received.indicators.rsi !== null, 'RSI should not be null with 20 candles');
+  assert(
+    Math.abs(received.indicators.rsi - expected) < 0.01,
+    `RSI: got ${received.indicators.rsi}, expected ${expected}`
+  );
+});
+
+// ── T21: EMA9 and EMA21 correct ───────────────────────────────────────────────
+await test('T21 IndicatorEngine: EMA9 and EMA21 correct from known series', async () => {
+  resetModules('./data/candle-builder', './data/indicator-engine');
+  const cb  = require('./data/candle-builder');
+  require('./data/indicator-engine');
+  const eventBus = require('./core/event-bus');
+  const EVENTS   = require('./core/events');
+  const { EMA }  = require('technicalindicators');
+
+  const closes = [24000,24050,24020,24080,24060,24100,24090,24130,24110,24150,
+                  24140,24160,24130,24170,24155,24180,24160,24200,24185,24210,
+                  24220,24200,24240];
+  const candles = closes.map((c, i) => ({
+    open: c - 10, high: c + 10, low: c - 20, close: c,
+    volume: 1000, openTime: Date.now() + i * 900000,
+  }));
+  cb.seedBuffer(15, candles);
+
+  const exp9  = EMA.calculate({ values: closes, period: 9 });
+  const exp21 = EMA.calculate({ values: closes, period: 21 });
+
+  let received = null;
+  eventBus.once(EVENTS.INDICATORS_UPDATED, (d) => { received = d; });
+  eventBus.emit(EVENTS.CANDLE_CLOSE_15M, candles[candles.length - 1]);
+
+  assert(received !== null, 'INDICATORS_UPDATED not emitted');
+  assert(
+    Math.abs(received.indicators.ema9 - exp9[exp9.length - 1]) < 0.01,
+    `EMA9: got ${received.indicators.ema9}, expected ${exp9[exp9.length - 1]}`
+  );
+  assert(
+    Math.abs(received.indicators.ema21 - exp21[exp21.length - 1]) < 0.01,
+    `EMA21: got ${received.indicators.ema21}, expected ${exp21[exp21.length - 1]}`
+  );
+});
+
+// ── T22: MACD correct ─────────────────────────────────────────────────────────
+await test('T22 IndicatorEngine: MACD correct from known series', async () => {
+  resetModules('./data/candle-builder', './data/indicator-engine');
+  const cb  = require('./data/candle-builder');
+  require('./data/indicator-engine');
+  const eventBus = require('./core/event-bus');
+  const EVENTS   = require('./core/events');
+  const { MACD } = require('technicalindicators');
+
+  // Need 35+ candles for MACD(12,26,9)
+  const closes = Array.from({ length: 40 }, (_, i) =>
+    24000 + Math.sin(i * 0.3) * 200 + i * 5
+  );
+  const candles = closes.map((c, i) => ({
+    open: c - 10, high: c + 15, low: c - 20, close: c,
+    volume: 1000, openTime: Date.now() + i * 900000,
+  }));
+  cb.seedBuffer(15, candles);
+
+  const macdArr = MACD.calculate({
+    values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9,
+    SimpleMAOscillator: false, SimpleMASignal: false,
+  });
+  const exp = macdArr[macdArr.length - 1];
+
+  let received = null;
+  eventBus.once(EVENTS.INDICATORS_UPDATED, (d) => { received = d; });
+  eventBus.emit(EVENTS.CANDLE_CLOSE_15M, candles[candles.length - 1]);
+
+  assert(received !== null, 'INDICATORS_UPDATED not emitted');
+  assert(received.indicators.macd !== null, 'MACD should not be null with 40 candles');
+  assert(
+    Math.abs(received.indicators.macd.macd - exp.MACD) < 0.01,
+    `MACD line mismatch`
+  );
+  assert(
+    Math.abs(received.indicators.macd.signal - exp.signal) < 0.01,
+    `MACD signal mismatch`
+  );
+});
+
+// ── T23: Bollinger Band width correct ─────────────────────────────────────────
+await test('T23 IndicatorEngine: Bollinger Band width correct', async () => {
+  resetModules('./data/candle-builder', './data/indicator-engine');
+  const cb  = require('./data/candle-builder');
+  require('./data/indicator-engine');
+  const eventBus        = require('./core/event-bus');
+  const EVENTS          = require('./core/events');
+  const { BollingerBands } = require('technicalindicators');
+
+  const closes = Array.from({ length: 25 }, (_, i) =>
+    24000 + Math.sin(i * 0.5) * 150
+  );
+  const candles = closes.map((c, i) => ({
+    open: c - 5, high: c + 10, low: c - 10, close: c,
+    volume: 1000, openTime: Date.now() + i * 900000,
+  }));
+  cb.seedBuffer(15, candles);
+
+  const bbArr = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
+  const expBb = bbArr[bbArr.length - 1];
+  const expWidth = ((expBb.upper - expBb.lower) / expBb.middle) * 100;
+
+  let received = null;
+  eventBus.once(EVENTS.INDICATORS_UPDATED, (d) => { received = d; });
+  eventBus.emit(EVENTS.CANDLE_CLOSE_15M, candles[candles.length - 1]);
+
+  assert(received !== null, 'INDICATORS_UPDATED not emitted');
+  assert(received.indicators.bb !== null, 'BB should not be null with 25 candles');
+  assert(
+    Math.abs(received.indicators.bb.width - expWidth) < 0.01,
+    `BB width: got ${received.indicators.bb.width}, expected ${expWidth}`
+  );
+});
+
+// ── T24: null when buffer too small (warm-up) ─────────────────────────────────
+await test('T24 IndicatorEngine: returns null for all indicators when buffer < minimum', async () => {
+  resetModules('./data/candle-builder', './data/indicator-engine');
+  const cb = require('./data/candle-builder');
+  require('./data/indicator-engine');
+  const eventBus = require('./core/event-bus');
+  const EVENTS   = require('./core/events');
+
+  // Only 5 candles — below every indicator's minimum
+  const candles = Array.from({ length: 5 }, (_, i) => ({
+    open: 24000 + i, high: 24010 + i, low: 23990 + i,
+    close: 24000 + i, volume: 1000, openTime: Date.now() + i * 900000,
+  }));
+  cb.seedBuffer(15, candles);
+
+  let received = null;
+  eventBus.once(EVENTS.INDICATORS_UPDATED, (d) => { received = d; });
+  eventBus.emit(EVENTS.CANDLE_CLOSE_15M, candles[candles.length - 1]);
+
+  assert(received !== null, 'INDICATORS_UPDATED must still be emitted during warm-up');
+  assert(received.indicators.rsi  === null, 'RSI should be null  (need 14, have 5)');
+  assert(received.indicators.macd === null, 'MACD should be null (need 35, have 5)');
+  assert(received.indicators.bb   === null, 'BB should be null   (need 20, have 5)');
+  assert(received.indicators.atr  === null, 'ATR should be null  (need 15, have 5)');
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n${passed + failed} tests — ${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
