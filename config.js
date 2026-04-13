@@ -53,6 +53,9 @@ const config = {
   OPTIONS_CHAIN_INTERVAL: 15,     // minutes between option chain refreshes
   WEBSOCKET_RECONNECT_TIMEOUT: 30, // seconds before circuit breaker trips
   CANDLE_HISTORY_SIZE: 200,       // rolling candles kept in memory per timeframe
+  STARTUP_CANDLE_COUNT: 50,       // candles fetched at boot; bump to 200 for deep scans
+  DATA_SOURCE: process.env.DATA_SOURCE || 'NSE', // 'NSE' | 'DHAN' — independent of EXECUTION_MODE
+                                                  // NSE = polling, no subscription; DHAN = WebSocket (Phase 3)
 
   // ── Brokerage & Costs (Dhan flat fee model) ───────────────────────────────
   BROKERAGE_PER_ORDER: 20,        // ₹20 per executed order leg
