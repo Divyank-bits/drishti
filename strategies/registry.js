@@ -60,16 +60,18 @@ class StrategyRegistry {
       throw new Error(`[Registry] Failed to load ${filename}: ${err.message}`);
     }
 
-    // Must be a constructor
-    if (typeof StrategyClass !== 'function') {
-      throw new Error(`[Registry] ${filename} must export a class, got ${typeof StrategyClass}`);
-    }
-
+    // Accept either a class (function) or a pre-instantiated singleton object
     let instance;
-    try {
-      instance = new StrategyClass();
-    } catch (err) {
-      throw new Error(`[Registry] Cannot instantiate ${filename}: ${err.message}`);
+    if (typeof StrategyClass === 'function') {
+      try {
+        instance = new StrategyClass();
+      } catch (err) {
+        throw new Error(`[Registry] Cannot instantiate ${filename}: ${err.message}`);
+      }
+    } else if (typeof StrategyClass === 'object' && StrategyClass !== null) {
+      instance = StrategyClass;
+    } else {
+      throw new Error(`[Registry] ${filename} must export a class or singleton instance, got ${typeof StrategyClass}`);
     }
 
     // Must extend BaseStrategy

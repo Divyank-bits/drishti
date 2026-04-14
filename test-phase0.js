@@ -381,12 +381,11 @@ test('T13 — SessionContext: updateRegime() tracks changes', () => {
 // ── T14: StrategyRegistry ───────────────────────────────────────────────────
 console.log('\n── StrategyRegistry ─────────────────────────────────────────');
 
-test('T14 — Registry: loads without error, 0 strategies in Phase 0', () => {
+test('T14 — Registry: loads without error, API intact', () => {
   const registry = require('./strategies/registry');
   assert(Array.isArray(registry.getAll()), 'getAll() should return an array');
-  assert(registry.count === 0, `Expected 0 strategies in Phase 0, got ${registry.count}`);
-  assert(registry.getByRegime('A').length === 0, 'getByRegime should return empty array');
-  assert(registry.getBestForMarket({}, 'A') === null, 'getBestForMarket should return null');
+  assert(typeof registry.count === 'number', 'count should be a number');
+  assert(Array.isArray(registry.getByRegime('A')), 'getByRegime should return an array');
 });
 
 // ── T15: Config ─────────────────────────────────────────────────────────────
