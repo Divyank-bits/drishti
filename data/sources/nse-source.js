@@ -87,7 +87,12 @@ class NseSource {
       
       // Find the NIFTY 50 entry in the indices list
       const nifty = data.data.find(idx => idx.index === "NIFTY 50");
-      const ltp = nifty?.last;
+      let ltp = nifty?.last;
+
+    // 2. Fallback to metadata if live array is empty (common when market is closed/reopening)
+      if (!ltp && data.metadata) {
+        ltp = data.metadata.last;
+      }
 
       if (!ltp || ltp <= 0) throw new Error('Invalid LTP in library response');
 
