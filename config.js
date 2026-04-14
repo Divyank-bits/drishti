@@ -64,6 +64,16 @@ const config = {
   GST_RATE: 0.18,                 // 18% on brokerage + exchange charges
   STAMP_DUTY_RATE: 0.00003,       // 0.003% on buy side
 
+  // ── Paper Executor ────────────────────────────────────────────────────────
+  SLIPPAGE_PER_LOT: 1.5,              // ₹ fixed slippage per lot — swap point for spread-based (Phase 3)
+
+  // ── Strategy Filters ──────────────────────────────────────────────────────
+  MACD_ZERO_THRESHOLD: 2.0,           // abs(macd.macd) must be < this for entry
+  IV_PERCENTILE_PROXY_MIN: 50,        // BB width percentile proxy minimum
+
+  // ── Telegram ──────────────────────────────────────────────────────────────
+  TRADE_APPROVAL_TIMEOUT_MS: 180000,  // 3-minute trade approval window
+
   // ── Dashboard ─────────────────────────────────────────────────────────────
   DASHBOARD_PORT: parseInt(process.env.DASHBOARD_PORT, 10) || 3000,
   SSE_PUSH_INTERVAL_MS: 2000,     // dashboard SSE push frequency
