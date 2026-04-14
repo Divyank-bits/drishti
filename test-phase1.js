@@ -399,9 +399,9 @@ await test('T28 OptionsChain: _parseOptionChain() produces correct shape from fa
     },
     filtered: {
       data: [
-        { strikePrice: 24000, CE: { openInterest: 50000, impliedVolatility: 12 }, PE: { openInterest: 30000, impliedVolatility: 11 } },
-        { strikePrice: 24500, CE: { openInterest: 120000, impliedVolatility: 10 }, PE: { openInterest: 20000, impliedVolatility: 10 } },
-        { strikePrice: 23800, CE: { openInterest: 15000, impliedVolatility: 13 }, PE: { openInterest: 110000, impliedVolatility: 12 } },
+        { strikePrice: 24000, CE: { openInterest: 50000, impliedVolatility: 12, lastPrice: 150.5 }, PE: { openInterest: 30000, impliedVolatility: 11, lastPrice: 120.3 } },
+        { strikePrice: 24500, CE: { openInterest: 120000, impliedVolatility: 10, lastPrice: 85.0 }, PE: { openInterest: 20000, impliedVolatility: 10, lastPrice: 200.0 } },
+        { strikePrice: 23800, CE: { openInterest: 15000, impliedVolatility: 13, lastPrice: 210.0 }, PE: { openInterest: 110000, impliedVolatility: 12, lastPrice: 75.5 } },
       ],
       CE: { totOI: 185000 },
       PE: { totOI: 160000 },
@@ -418,6 +418,10 @@ await test('T28 OptionsChain: _parseOptionChain() produces correct shape from fa
   assert(typeof result.pcr      === 'number',     'pcr should be a number');
   assert(result.pcr > 0,                          'pcr should be positive');
   assert(typeof result.timestamp === 'string',    'timestamp should be a string');
+  assert(typeof result.strikeData === 'object', 'strikeData is object');
+  assert(result.strikeData[24000] !== undefined, 'strikeData has strike 24000');
+  assert(result.strikeData[24000].ce === 150.5, 'strikeData CE price correct');
+  assert(result.strikeData[24000].pe === 120.3, 'strikeData PE price correct');
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

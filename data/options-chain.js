@@ -103,6 +103,15 @@ class OptionsChain {
       Math.abs(curr - underlying) < Math.abs(prev - underlying) ? curr : prev
     );
 
+    // Build strike → option price lookup for paper executor
+    const strikeData = {};
+    for (const leg of filtered.data) {
+      strikeData[leg.strikePrice] = {
+        ce: leg.CE ? leg.CE.lastPrice : null,
+        pe: leg.PE ? leg.PE.lastPrice : null,
+      };
+    }
+
     return {
       symbol:          'NIFTY',
       expiry,
@@ -112,6 +121,7 @@ class OptionsChain {
       maxCeOiStrike:   maxCeStrike,
       maxPeOiStrike:   maxPeStrike,
       atmStrike,
+      strikeData,
       timestamp:       new Date().toISOString(),
     };
   }
