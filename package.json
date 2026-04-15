@@ -8,7 +8,7 @@
     "dev": "NODE_ENV=development node index.js",
     "test:phase0": "node test-phase0.js",
     "test:phase1": "node test-phase1.js",
-    "test:phase2": "node test-phase2.js"
+    "test:phase2": "node test-phase2-executor.js && node test-phase2-journal.js && node test-phase2-strategy.js && node test-phase2-antihunt.js && node test-phase2-telegram.js && node test-phase2-integration.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",

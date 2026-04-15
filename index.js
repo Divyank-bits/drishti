@@ -108,8 +108,22 @@ async function boot() {
   tickStream.start();
   log('INFO', 'TickStream', `Starting tick stream (DATA_SOURCE=${config.DATA_SOURCE})`);
 
+  // ── Phase 2: Trading Layer ─────────────────────────────────────────────────
+  const journal  = require('./journal/trade-journal');
+  const telegram = require('./notifications/telegram');
+
+  const { pnlToday, tradesToday } = await journal.restoreFromJournal();
+  if (pnlToday !== 0 || tradesToday !== 0) {
+    log('INFO', 'Boot', `Restored: pnlToday=₹${pnlToday}, tradesToday=${tradesToday}`);
+  }
+
+  require('./execution/paper-executor');
+  require('./strategies/iron-condor.strategy');
+  require('./monitoring/position-tracker');
+
+  telegram.start();
+
   // ── Step 7: System ready ──────────────────────────────────────────────────
-  // Phase 2: init position tracker, paper executor, Telegram bot, dashboard server, cron jobs
 
   return { circuitBreaker, sessionContext, registry };
 }
