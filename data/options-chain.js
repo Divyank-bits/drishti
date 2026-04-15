@@ -45,7 +45,7 @@ class OptionsChain {
     
     try {
       log('INFO', 'Fetching NIFTY option chain...');
-      const raw = await nse.getOptionChain("NIFTY");
+      const raw = await nse.getIndexOptionChain("NIFTY");
       const result = this._parseOptionChain(raw);
       
       this._lastGoodResult = result;
