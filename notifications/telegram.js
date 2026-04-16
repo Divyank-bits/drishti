@@ -78,7 +78,7 @@ class TelegramNotifier {
       }
       if (text === '/status') {
         const snap = (() => {
-          try { return require('../core/session-context').snapshot(); } catch { return {}; }
+          try { return require('../core/session-context').shared.snapshot(); } catch { return {}; }
         })();
         const lines = [
           `*Drishti Status*`,

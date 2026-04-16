@@ -65,7 +65,7 @@ async function boot() {
   log('INFO', 'CircuitBreaker', '7 breakers armed');
 
   // ── Step 4: Session context ───────────────────────────────────────────────
-  const sessionContext = new SessionContext();
+  const sessionContext = SessionContext.shared;
   log('INFO', 'SessionContext', `Session initialised for ${sessionContext.snapshot().date}`);
 
   // ── Step 5: Strategy registry ─────────────────────────────────────────────

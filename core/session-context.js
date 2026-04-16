@@ -179,3 +179,7 @@ class SessionContext {
 }
 
 module.exports = SessionContext;
+
+// Shared singleton — use this everywhere outside of tests.
+// Tests create isolated instances via `new SessionContext()` directly.
+module.exports.shared = new SessionContext();

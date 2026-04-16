@@ -15,7 +15,7 @@ const paperExecutor  = require('../execution/paper-executor');
 const journal        = require('../journal/trade-journal');
 
 const stateMachine   = new StateMachine();
-const sessionContext = new SessionContext();
+const sessionContext = SessionContext.shared;
 
 function log(level, msg) {
   const ts = new Date().toTimeString().slice(0, 8);
