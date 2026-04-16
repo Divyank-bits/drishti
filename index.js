@@ -1,14 +1,15 @@
 /**
  * @file index.js
- * @description Drishti application entry point. Runs the boot sequence in order:
- *                1. Load and validate config + environment
+ * @description Drishti application entry point. Boot sequence:
+ *                1. Validate config + environment
  *                2. Initialise event bus
  *                3. Initialise circuit breaker
  *                4. Initialise session context
  *                5. Load strategy registry
- *                6. Emit SYSTEM_READY
+ *                6. Phase 1 data layer (historical, options chain, tick stream)
+ *                7. Phase 2 trading layer (journal, executor, strategy, position tracker)
+ *                8. Phase 3 intelligence layer (Claude client warmup)
  *
- *              Phases 1–5 will add their own boot steps after step 4.
  *              Each step is guarded — failure halts the process immediately.
  */
 
@@ -31,8 +32,17 @@ async function boot() {
   log('INFO', 'System', 'Booting Drishti...');
 
   // ── Step 1: Validate environment ─────────────────────────────────────────
-  const REQUIRED_KEYS = ['ANTHROPIC_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
-  const missing = REQUIRED_KEYS.filter((key) => !config[key]);
+  // ANTHROPIC_API_KEY is required only in AI/HYBRID modes.
+  const ALWAYS_REQUIRED = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
+  const LIVE_REQUIRED   = config.EXECUTION_MODE === 'LIVE'
+    ? ['DHAN_CLIENT_ID', 'DHAN_ACCESS_TOKEN']
+    : [];
+  const CLAUDE_REQUIRED = ['AI', 'HYBRID'].includes(config.INTELLIGENCE_MODE)
+    ? ['ANTHROPIC_API_KEY']
+    : [];
+
+  const missing = [...ALWAYS_REQUIRED, ...LIVE_REQUIRED, ...CLAUDE_REQUIRED]
+    .filter((key) => !config[key]);
 
   if (missing.length > 0) {
     log('ERROR', 'System', `Missing required environment variables: ${missing.join(', ')}`);
@@ -46,6 +56,7 @@ async function boot() {
 
   log('INFO', 'System', `Intelligence mode : ${config.INTELLIGENCE_MODE}`);
   log('INFO', 'System', `Execution mode    : ${config.EXECUTION_MODE}`);
+  log('INFO', 'System', `Data source       : ${config.DATA_SOURCE}`);
   log('INFO', 'System', `Environment       : ${config.NODE_ENV}`);
 
   // ── Step 2: Event bus ─────────────────────────────────────────────────────
@@ -117,13 +128,30 @@ async function boot() {
     log('INFO', 'Boot', `Restored: pnlToday=₹${pnlToday}, tradesToday=${tradesToday}`);
   }
 
-  require('./execution/paper-executor');
+  config.EXECUTION_MODE === 'LIVE'
+    ? require('./execution/dhan-executor')
+    : require('./execution/paper-executor');
   require('./strategies/iron-condor.strategy');
   require('./monitoring/position-tracker');
 
   telegram.start();
 
-  // ── Step 7: System ready ──────────────────────────────────────────────────
+  // ── Phase 3: Intelligence layer ───────────────────────────────────────────
+  const claudeClient = require('./intelligence/claude-client');
+  if (claudeClient.isAvailable()) {
+    log('INFO', 'ClaudeClient', `Ready — model: ${config.CLAUDE_MODEL}`);
+  } else {
+    log('WARN', 'ClaudeClient',
+      'ANTHROPIC_API_KEY absent or unavailable — system will run in RULES-only mode');
+  }
+
+  log('INFO', 'System',
+    `Boot complete | ` +
+    `Intelligence: ${config.INTELLIGENCE_MODE} | ` +
+    `Execution: ${config.EXECUTION_MODE} | ` +
+    `Data: ${config.DATA_SOURCE} | ` +
+    `Claude: ${claudeClient.isAvailable() ? 'online' : 'offline (RULES fallback)'}`
+  );
 
   return { circuitBreaker, sessionContext, registry };
 }

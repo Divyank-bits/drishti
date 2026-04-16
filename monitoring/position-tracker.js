@@ -11,7 +11,10 @@ const EVENTS         = require('../core/events');
 const StateMachine   = require('../core/state-machine');
 const SessionContext  = require('../core/session-context');
 const antiHunt       = require('./anti-hunt');
-const paperExecutor  = require('../execution/paper-executor');
+const config         = require('../config');
+const executor       = config.EXECUTION_MODE === 'LIVE'
+  ? require('../execution/dhan-executor')
+  : require('../execution/paper-executor');
 const journal        = require('../journal/trade-journal');
 
 const stateMachine   = new StateMachine();
@@ -83,7 +86,7 @@ class PositionTracker {
 
   _onOptionsChain(payload) {
     if (!this._activeFill || this._exiting) return;
-    this._lastKnownPnl = paperExecutor.computeUnrealisedPnl(this._activeFill);
+    this._lastKnownPnl = executor.computeUnrealisedPnl(this._activeFill);
     journal.write('POSITION_UPDATED', { unrealisedPnl: this._lastKnownPnl, ltpAtUpdate: payload.underlyingValue });
   }
 
@@ -130,6 +133,29 @@ class PositionTracker {
       });
       journal.write('POSITION_FLAGGED', { rule: decision.rule, reason: decision.reason });
       log('WARN', `Position flagged: ${decision.reason}`);
+
+      // Rule 8 — ask Claude whether this flag looks like a hunt (AI/HYBRID only)
+      antiHunt.evaluateWithClaude(position, candle, sessionContext.snapshot())
+        .then((huntResult) => {
+          eventBus.emit(EVENTS.HUNT_DETECTION_RESULT, {
+            orderId:     this._activeFill?.orderId,
+            isLikelyHunt: huntResult.isLikelyHunt,
+            confidence:  huntResult.confidence,
+            reasoning:   huntResult.reasoning,
+            action:      huntResult.action,
+          });
+          journal.write('HUNT_DETECTION', huntResult);
+          log('INFO', `Rule 8: isLikelyHunt=${huntResult.isLikelyHunt} action=${huntResult.action} — ${huntResult.reasoning}`);
+
+          // If Claude says EXIT and position is still active, honour it
+          if (huntResult.action === 'EXIT' && this._activeFill && !this._exiting) {
+            log('WARN', `Rule 8: Claude recommends EXIT — ${huntResult.reasoning}`);
+            this._exit(`Rule 8 (Claude hunt detection): ${huntResult.reasoning}`);
+          }
+        })
+        .catch((err) => {
+          log('WARN', `Rule 8 evaluateWithClaude failed: ${err.message}`);
+        });
     }
 
     if (decision.shouldExit) {
@@ -146,7 +172,7 @@ class PositionTracker {
     log('INFO', `Exiting position ${this._activeFill.orderId}: ${reason}`);
 
     try {
-      const exitResult = await paperExecutor.exitOrder(this._activeFill.orderId);
+      const exitResult = await executor.exitOrder(this._activeFill.orderId);
       const duration   = Math.round((Date.now() - this._entryTime) / 1000);
 
       journal.write('ORDER_EXITED', { exitPrices: exitResult.legs, realisedPnl: exitResult.realisedPnl });

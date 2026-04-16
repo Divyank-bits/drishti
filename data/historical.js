@@ -32,16 +32,29 @@ class Historical {
   async fetch() {
     let candles = null;
 
-    // Source 1: NSE India
-    try {
-      candles = await this._fetchFromNSE();
-      log('INFO', `Loaded ${candles.length} candles from NSE India`);
-      this._writeCache(candles);
-    } catch (err) {
-      log('WARN', `NSE India failed: ${err.message}`);
+    // Source 1: Dhan historical API (when DATA_SOURCE=DHAN, tried first)
+    if (config.DATA_SOURCE === 'DHAN') {
+      try {
+        candles = await this._fetchFromDhan();
+        log('INFO', `Loaded ${candles.length} candles from Dhan historical API`);
+        this._writeCache(candles);
+      } catch (err) {
+        log('WARN', `Dhan historical fetch failed: ${err.message}`);
+      }
     }
 
-    // Source 2: Yahoo Finance
+    // Source 2: NSE India
+    if (!candles) {
+      try {
+        candles = await this._fetchFromNSE();
+        log('INFO', `Loaded ${candles.length} candles from NSE India`);
+        this._writeCache(candles);
+      } catch (err) {
+        log('WARN', `NSE India failed: ${err.message}`);
+      }
+    }
+
+    // Source 3: Yahoo Finance
     if (!candles) {
       try {
         candles = await this._fetchFromYahoo();
@@ -52,7 +65,7 @@ class Historical {
       }
     }
 
-    // Source 3: local cache
+    // Source 4: local cache
     if (!candles) {
       try {
         candles = this._readCache();
@@ -120,6 +133,56 @@ class Historical {
       volume:   ohlcv.volume[i] || 0,
       openTime: ts * 1000,
     })).filter((c) => c.close != null);
+  }
+
+  // Dhan historical charts API: POST /v2/charts/historical
+  // Response: { open:[], high:[], low:[], close:[], volume:[], timestamp:[] }
+  // timestamp values are unix seconds
+  async _fetchFromDhan() {
+    if (!config.DHAN_CLIENT_ID || !config.DHAN_ACCESS_TOKEN) {
+      throw new Error('DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN not set');
+    }
+
+    const toDate   = new Date();
+    const fromDate = new Date(toDate - COUNT * 15 * 60 * 1000 * 2); // fetch 2× to ensure COUNT candles after gaps
+
+    const fmt = (d) => d.toISOString().slice(0, 10); // YYYY-MM-DD
+
+    const res = await this._http.post(
+      `${config.DHAN_REST_URL}/charts/historical`,
+      {
+        securityId:      config.DHAN_SECURITY_ID,
+        exchangeSegment: config.DHAN_EXCHANGE_SEGMENT,
+        instrument:      'INDEX',
+        expiryCode:      0,
+        oi:              false,
+        interval:        '15',   // 15-minute candles
+        fromDate:        fmt(fromDate),
+        toDate:          fmt(toDate),
+      },
+      {
+        headers: {
+          'access-token':  config.DHAN_ACCESS_TOKEN,
+          'client-id':     config.DHAN_CLIENT_ID,
+          'Content-Type':  'application/json',
+        },
+        timeout: 15000,
+      }
+    );
+
+    const d = res.data;
+    if (!Array.isArray(d.timestamp) || d.timestamp.length === 0) {
+      throw new Error('Empty Dhan historical response');
+    }
+
+    return d.timestamp.map((ts, i) => ({
+      open:     d.open[i],
+      high:     d.high[i],
+      low:      d.low[i],
+      close:    d.close[i],
+      volume:   d.volume[i] || 0,
+      openTime: ts * 1000, // convert unix seconds → ms
+    })).filter((c) => c.close != null && c.close > 0);
   }
 
   _readCache() {

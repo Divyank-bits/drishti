@@ -57,6 +57,12 @@ const config = {
   DATA_SOURCE: process.env.DATA_SOURCE || 'NSE', // 'NSE' | 'DHAN' — independent of EXECUTION_MODE
                                                   // NSE = polling, no subscription; DHAN = WebSocket (Phase 3)
 
+  // ── Dhan Feed & Instrument IDs ────────────────────────────────────────────
+  DHAN_WS_URL:          'wss://api-feed.dhan.co',  // binary feed endpoint
+  DHAN_REST_URL:        'https://api.dhan.co/v2',  // REST API base URL
+  DHAN_SECURITY_ID:     '13',                      // NIFTY 50 index security ID
+  DHAN_EXCHANGE_SEGMENT:'IDX_I',                   // index segment identifier
+
   // ── Brokerage & Costs (Dhan flat fee model) ───────────────────────────────
   BROKERAGE_PER_ORDER: 20,        // ₹20 per executed order leg
   STT_RATE: 0.000625,             // 0.0625% on sell side for options

@@ -7,14 +7,15 @@
  */
 'use strict';
 
-const BaseStrategy    = require('./base.strategy');
-const eventBus        = require('../core/event-bus');
-const EVENTS          = require('../core/events');
-const CircuitBreaker  = require('../core/circuit-breaker');
-const StateMachine    = require('../core/state-machine');
-const SessionContext  = require('../core/session-context');
-const config          = require('../config');
-const holidays        = require('../holidays.json');
+const BaseStrategy       = require('./base.strategy');
+const eventBus           = require('../core/event-bus');
+const EVENTS             = require('../core/events');
+const CircuitBreaker     = require('../core/circuit-breaker');
+const StateMachine       = require('../core/state-machine');
+const SessionContext     = require('../core/session-context');
+const config             = require('../config');
+const holidays           = require('../holidays.json');
+const strategySelector   = require('../intelligence/strategy-selector');
 
 // Module-level singletons for strategy use (separate from index.js instances;
 // the strategy only reads state — it does not drive these objects)
@@ -45,7 +46,14 @@ class IronCondorStrategy extends BaseStrategy {
     this._cachedIndicators = null;
     this._cachedOptions    = null;
     this._bbWidthHistory   = [];
+    this._candles15m       = []; // rolling cache for Claude prompts
     this._paused           = false;
+    this._evaluating       = false; // prevent concurrent Claude calls
+
+    eventBus.on(EVENTS.CANDLE_CLOSE_15M, (candle) => {
+      this._candles15m.push(candle);
+      if (this._candles15m.length > 20) this._candles15m.shift();
+    });
 
     eventBus.on(EVENTS.INDICATORS_UPDATED, (payload) => {
       if (payload.timeframe !== 15) return;
@@ -87,6 +95,7 @@ class IronCondorStrategy extends BaseStrategy {
     if (this._paused) return;
     if (circuitBreaker.isTripped()) return;
     if (stateMachine.getCurrentState() !== 'IDLE') return;
+    if (this._evaluating) return; // Claude call already in-flight
 
     const snap = {
       indicators:     this._cachedIndicators,
@@ -96,15 +105,19 @@ class IronCondorStrategy extends BaseStrategy {
       timestamp,
     };
 
-    const result = this.checkConditions(snap);
-    if (!result.eligible) {
-      log('DEBUG', `Entry conditions not met: ${result.failedConditions.join(', ')}`);
+    const conditionsResult = this.checkConditions(snap);
+
+    // In RULES mode the check is definitive; in AI mode we always call Claude.
+    // In HYBRID, we pass score to strategy-selector which applies the threshold.
+    const mode = (config.INTELLIGENCE_MODE || 'HYBRID').toUpperCase();
+    if (mode === 'RULES' && !conditionsResult.eligible) {
+      log('DEBUG', `Entry conditions not met: ${conditionsResult.failedConditions.join(', ')}`);
       return;
     }
 
     const trade = this.buildTrade(snap);
-    stateMachine.transition('SIGNAL_DETECTED');
-    eventBus.emit(EVENTS.SIGNAL_GENERATED, {
+
+    const signalPayload = {
       strategy:          this.name,
       strikes:           trade.strikes,
       legs:              trade.legs,
@@ -116,8 +129,38 @@ class IronCondorStrategy extends BaseStrategy {
       },
       expectedPremium:   trade.expectedPremium,
       timestamp:         new Date().toISOString(),
-    });
-    log('INFO', `Signal generated: IC ${JSON.stringify(trade.strikes)}`);
+    };
+
+    // Route through strategy-selector (async — handles AI/HYBRID/RULES internally)
+    this._evaluating = true;
+    strategySelector.select(conditionsResult, signalPayload, snap.sessionContext, [...this._candles15m])
+      .then((decision) => {
+        this._evaluating = false;
+
+        if (!decision.approved) {
+          log('INFO', `Signal discarded [${decision.mode}]: ${decision.reasoning}`);
+          eventBus.emit(EVENTS.SIGNAL_DISCARDED, {
+            strategy: this.name,
+            strikes:  trade.strikes,
+            reason:   decision.reasoning,
+            mode:     decision.mode,
+          });
+          return;
+        }
+
+        stateMachine.transition('SIGNAL_DETECTED');
+        eventBus.emit(EVENTS.SIGNAL_GENERATED, {
+          ...signalPayload,
+          intelligenceMode: decision.mode,
+          confidence:       decision.confidence,
+          reasoning:        decision.reasoning,
+        });
+        log('INFO', `Signal generated [${decision.mode}] confidence=${decision.confidence.toFixed(2)}: IC ${JSON.stringify(trade.strikes)}`);
+      })
+      .catch((err) => {
+        this._evaluating = false;
+        log('ERROR', `Strategy selector error: ${err.message}`);
+      });
   }
 
   // ── Core Interface ──────────────────────────────────────────────────────────

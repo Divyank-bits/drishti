@@ -1,16 +1,18 @@
 /**
  * @file anti-hunt.js
- * @description Pure function module — no event bus imports. Evaluates anti-hunt rules
- *              against current position state and last 15m candle. Called by
- *              position-tracker.js on each CANDLE_CLOSE_15M event.
+ * @description Evaluates anti-hunt rules against current position state and
+ *              last 15m candle. Called by position-tracker.js on each CANDLE_CLOSE_15M.
  *
  *              Rule evaluation order (strict):
  *                6 → 4 → 1+2 → 3 → 5
- *              Rule 8 (Claude hunt detection) skipped silently in RULES mode.
+ *              Rule 8 (Claude hunt detection) — async, AI/HYBRID only.
+ *              Skipped silently in RULES mode or when Claude is unavailable.
  */
 'use strict';
 
-const config = require('../config');
+const config         = require('../config');
+const claudeClient   = require('../intelligence/claude-client');
+const promptBuilder  = require('../intelligence/prompt-builder');
 
 function toIST(tsMs) {
   const istMs  = tsMs + 5.5 * 3600 * 1000;
@@ -89,4 +91,44 @@ function evaluate(position, candle, sessionContext) {
   return { shouldExit: false, flagged: false, rule: null, reason: 'All rules within bounds' };
 }
 
-module.exports = { evaluate };
+/**
+ * Rule 8 — Claude hunt detection (AI and HYBRID modes only).
+ * Called by position-tracker after the synchronous evaluate() returns a
+ * flag (not a definitive exit) to get a second opinion from Claude.
+ *
+ * @param {object} position     — same shape as evaluate()'s position param
+ * @param {object} candle       — the just-closed 15m candle
+ * @param {object} sessionCtx   — SessionContext.snapshot()
+ * @returns {Promise<{ isLikelyHunt: boolean, confidence: number, reasoning: string, action: string }>}
+ */
+async function evaluateWithClaude(position, candle, sessionCtx) {
+  const mode = (config.INTELLIGENCE_MODE || 'HYBRID').toUpperCase();
+
+  // Skip in RULES mode or if Claude circuit breaker has tripped
+  if (mode === 'RULES' || !claudeClient.isAvailable()) {
+    return { isLikelyHunt: false, confidence: 0, reasoning: 'Claude unavailable or RULES mode', action: 'HOLD' };
+  }
+
+  const prompt = promptBuilder.buildHuntPrompt(position, candle, sessionCtx);
+
+  let text;
+  try {
+    text = await claudeClient.call(prompt);
+  } catch (err) {
+    return { isLikelyHunt: false, confidence: 0, reasoning: `Claude call failed: ${err.message}`, action: 'HOLD' };
+  }
+
+  const parsed = claudeClient.parseJSON(text);
+  if (!parsed) {
+    return { isLikelyHunt: false, confidence: 0, reasoning: 'Unparseable Claude response', action: 'HOLD' };
+  }
+
+  return {
+    isLikelyHunt: parsed.isLikelyHunt === true,
+    confidence:   typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+    reasoning:    parsed.reasoning || '',
+    action:       parsed.action    || 'HOLD',
+  };
+}
+
+module.exports = { evaluate, evaluateWithClaude };
