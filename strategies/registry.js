@@ -6,11 +6,14 @@
  *
  *              Excludes: base.strategy.js and registry.js itself.
  *              Validates: each discovered file must export a class that extends BaseStrategy.
+ *              Phase 4: filters loaded strategies by config.ACTIVE_STRATEGIES.
+ *                       Exposes getEligible(marketData) for the strategy allocator.
  */
 
 const fs = require('fs');
 const path = require('path');
 const BaseStrategy = require('./base.strategy');
+const config = require('../config');
 
 class StrategyRegistry {
   constructor() {
@@ -28,11 +31,17 @@ class StrategyRegistry {
     const dir = __dirname;
     const EXCLUDED = new Set(['base.strategy.js', 'registry.js']);
 
+    // ACTIVE_STRATEGIES entries are kebab-case names matching filenames without .strategy.js
+    // e.g. 'iron-condor' matches 'iron-condor.strategy.js'
+    const activeSet = new Set(config.ACTIVE_STRATEGIES.map((s) => s.trim().toLowerCase()));
+
     let files;
     try {
-      files = fs.readdirSync(dir).filter(
-        (f) => f.endsWith('.strategy.js') && !EXCLUDED.has(f)
-      );
+      files = fs.readdirSync(dir).filter((f) => {
+        if (!f.endsWith('.strategy.js') || EXCLUDED.has(f)) return false;
+        const strategyName = f.replace('.strategy.js', '');
+        return activeSet.has(strategyName);
+      });
     } catch (err) {
       throw new Error(`[Registry] Cannot read strategies directory: ${err.message}`);
     }
@@ -114,6 +123,33 @@ class StrategyRegistry {
    */
   getByRegime(regime) {
     return this._strategies.filter((s) => s.supportsRegime(regime));
+  }
+
+  /**
+   * Returns all strategies whose checkConditions() passes, sorted by score descending.
+   * Used by strategy-allocator to select among multiple passing strategies.
+   *
+   * @param {object} marketData - Full market snapshot
+   * @returns {Array<{ strategy: BaseStrategy, result: object }>} Sorted by score desc, may be empty
+   */
+  getEligible(marketData) {
+    const scored = this._strategies
+      .map((strategy) => {
+        try {
+          const result = strategy.checkConditions(marketData);
+          return { strategy, result };
+        } catch (err) {
+          const ts = new Date().toTimeString().slice(0, 8);
+          console.error(
+            `[${ts}] [Registry] [ERROR] ${strategy.name}.checkConditions() threw: ${err.message}`
+          );
+          return null;
+        }
+      })
+      .filter((r) => r !== null && r.result.eligible);
+
+    scored.sort((a, b) => b.result.score - a.result.score);
+    return scored;
   }
 
   /**

@@ -26,7 +26,7 @@ Module._resolveFilename = function (request, parent, isMain, options) {
 };
 require.cache[require.resolve('./core/event-bus')] = { exports: stubBus };
 
-const PaperExecutor = require('./execution/paper-executor');
+const PaperExecutor = require('../execution/paper-executor');
 
 console.log('\n── Paper Executor Tests ─────────────────────────────────────────\n');
 
@@ -56,19 +56,19 @@ test('T01 placeOrder returns fill with 4 legs', async () => {
 test('T02 sell legs fill at ltp - slippage', async () => {
   const fill = await PaperExecutor.placeOrder(legs);
   const shortCe = fill.legs.find(l => l.strike === 24400 && l.action === 'SELL');
-  const config = require('./config');
+  const config = require('../config');
   assert.strictEqual(shortCe.fillPrice, 80.0 - config.SLIPPAGE_PER_LOT);
 });
 
 test('T03 buy legs fill at ltp + slippage', async () => {
   const fill = await PaperExecutor.placeOrder(legs);
   const longCe = fill.legs.find(l => l.strike === 24600 && l.action === 'BUY');
-  const config = require('./config');
+  const config = require('../config');
   assert.strictEqual(longCe.fillPrice, 40.0 + config.SLIPPAGE_PER_LOT);
 });
 
 test('T04 premiumCollected = (shortCe - longCe + shortPe - longPe) * lotSize', async () => {
-  const config = require('./config');
+  const config = require('../config');
   const slip = config.SLIPPAGE_PER_LOT;
   const lotSize = config.NIFTY_LOT_SIZE;
   const fill = await PaperExecutor.placeOrder(legs);

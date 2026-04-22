@@ -66,12 +66,12 @@ function assertThrows(fn, expectedMessage) {
 }
 
 // ── Imports ─────────────────────────────────────────────────────────────────
-const eventBus       = require('./core/event-bus');
-const EVENTS         = require('./core/events');
-const PositionStateMachine = require('./core/state-machine');
-const CircuitBreaker = require('./core/circuit-breaker');
-const SessionContext = require('./core/session-context');
-const config         = require('./config');
+const eventBus       = require('../core/event-bus');
+const EVENTS         = require('../core/events');
+const PositionStateMachine = require('../core/state-machine');
+const CircuitBreaker = require('../core/circuit-breaker');
+const SessionContext = require('../core/session-context');
+const config         = require('../config');
 
 // ── T01–T02: EventBus ───────────────────────────────────────────────────────
 console.log('\n── EventBus ─────────────────────────────────────────────────');
@@ -382,7 +382,7 @@ test('T13 — SessionContext: updateRegime() tracks changes', () => {
 console.log('\n── StrategyRegistry ─────────────────────────────────────────');
 
 test('T14 — Registry: loads without error, API intact', () => {
-  const registry = require('./strategies/registry');
+  const registry = require('../strategies/registry');
   assert(Array.isArray(registry.getAll()), 'getAll() should return an array');
   assert(typeof registry.count === 'number', 'count should be a number');
   assert(Array.isArray(registry.getByRegime('A')), 'getByRegime should return an array');

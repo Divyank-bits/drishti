@@ -20,17 +20,17 @@ async function test(name, fn) {
 console.log('\n── Integration Tests ────────────────────────────────────────────\n');
 
 // Use real event bus for integration
-const eventBus = require('./core/event-bus');
-const EVENTS   = require('./core/events');
+const eventBus = require('../core/event-bus');
+const EVENTS   = require('../core/events');
 
 // Patch journal to temp file before any module loads it
-const journal     = require('./journal/trade-journal');
+const journal     = require('../journal/trade-journal');
 const tmpJournal  = path.join(os.tmpdir(), `drishti-integration-${Date.now()}.ndjson`);
 journal._filePath = tmpJournal;
 
 // Load modules — they self-register on the event bus via require
-const paperExecutor   = require('./execution/paper-executor');
-const positionTracker = require('./monitoring/position-tracker');
+const paperExecutor   = require('../execution/paper-executor');
+const positionTracker = require('../monitoring/position-tracker');
 
 // Inject fake market data so fills and exits can compute prices
 const fakeStrikeData = {

@@ -6,7 +6,7 @@
 'use strict';
 
 const assert   = require('assert');
-const antiHunt = require('./monitoring/anti-hunt');
+const antiHunt = require('../monitoring/anti-hunt');
 
 let passed = 0, failed = 0;
 function test(name, fn) {

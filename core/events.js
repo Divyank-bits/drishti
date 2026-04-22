@@ -30,6 +30,11 @@ module.exports = Object.freeze({
   CLAUDE_RESPONSE:   'CLAUDE_RESPONSE',
   CLAUDE_API_ERROR:  'CLAUDE_API_ERROR',
 
+  // ── Multi-Strategy (Phase 4) ──────────────────────────────────────────────
+  STRATEGY_SELECTED:           'STRATEGY_SELECTED',            // allocator picked a strategy to execute
+  STRATEGY_SKIPPED:            'STRATEGY_SKIPPED',             // strategy passed rules but was not selected
+  STRATEGY_ALLOCATION_CHANGED: 'STRATEGY_ALLOCATION_CHANGED',  // capital or mode allocation updated at runtime
+
   // ── Telegram / User Commands ─────────────────────────────────────────────
   USER_APPROVED:              'USER_APPROVED',
   USER_REJECTED:              'USER_REJECTED',

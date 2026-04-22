@@ -1,10 +1,15 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # CLAUDE.md — Drishti Trading System
 
 ## What This Project Is
 
 Drishti is a **local AI-powered options trading system** for Indian stock markets (NSE/BSE).
-It runs on Node.js, trades NIFTY options (Iron Condor strategy), and uses Claude AI for
-market analysis. All execution is local — no cloud deployment.
+It runs on Node.js, trades NIFTY/multi-symbol options (Iron Condor, Bull Put Spread, Bear Call
+Spread, Straddle strategies), and uses Claude AI for market analysis. All execution is local —
+no cloud deployment.
 
 ---
 
@@ -12,14 +17,17 @@ market analysis. All execution is local — no cloud deployment.
 
 Each phase is only started after the user explicitly confirms the previous phase passes tests.
 
-| Phase | What Gets Built | Gate |
-|-------|----------------|------|
-| **0** | Architectural skeleton — event bus, state machine, circuit breakers, config | `test-phase0.js` PASS |
-| **1** | Data layer — candle builder, historical fetch, options chain, indicators, tick stream | `test-phase1.js` PASS |
-| **2** | Iron Condor paper trading — full strategy, Claude integration, anti-hunt, dashboard | `test-phase2.js` PASS |
-| **3** | (Future) Live Dhan execution | User confirms Phase 2 |
-| **4** | (Future) Multi-strategy expansion | User confirms Phase 3 |
-| **5** | (Future) Deep scan / watchlist | User confirms Phase 4 |
+| Phase | What Gets Built | Status |
+|-------|----------------|--------|
+| **0** | Architectural skeleton — event bus, state machine, circuit breakers, config | ✅ COMPLETE |
+| **1** | Data layer — candle builder, historical fetch, options chain, indicators, tick stream | ✅ COMPLETE |
+| **2** | Iron Condor paper trading — full strategy, Claude integration, anti-hunt, dashboard | ✅ COMPLETE |
+| **3** | Live Dhan execution — WebSocket feed, DhanExecutor, real order placement | ✅ COMPLETE |
+| **4** | Multi-strategy expansion — Bull Put Spread, Bear Call Spread, Straddle, strategy allocator | ✅ COMPLETE |
+| **Pre-5** | Critical fixes — basket orders, per-position StateMachine, boot reconciliation, anti-hunt knobs, snapshot collection | 🔜 NEXT |
+| **5** | Deep scan / watchlist — multi-symbol scanner, ranked watchlist, `/scan` Telegram command | ⏳ PENDING |
+| **6** | Equity directional scan — pattern detection (5 named patterns), VWAP, confluence scoring, `/scan RELIANCE` | ⏳ PENDING |
+| **7** | Backtesting + analytics — SQLite, NSE Bhavcopy, candle replay, performance report (optional, skippable) | ⏳ PENDING |
 
 **Do not implement code from a future phase while building the current one.**
 
@@ -36,9 +44,12 @@ Each phase is only started after the user explicitly confirms the previous phase
   session-context.js    ← day's accumulated market context
 
 /strategies
-  base.strategy.js      ← abstract base class (interface contract)
-  registry.js           ← auto-discovers strategy files in this folder
+  base.strategy.js              ← abstract base class (interface contract)
+  registry.js                   ← auto-discovers strategy files; getEligible() scores all active strategies
   iron-condor.strategy.js
+  bull-put-spread.strategy.js   ← bullish regime (VIX < 20, RSI > 50, NIFTY above EMA21)
+  bear-call-spread.strategy.js  ← bearish regime (VIX < 20, RSI < 50, NIFTY below EMA21)
+  straddle.strategy.js          ← neutral/high-IV regime (VIX 18–25, IV Pct > 70%)
 
 /data
   tick-stream.js        ← factory: selects source based on DATA_SOURCE config
@@ -56,9 +67,10 @@ Each phase is only started after the user explicitly confirms the previous phase
   dhan-executor.js      ← real Dhan REST API (Phase 3+)
 
 /intelligence
-  claude-client.js      ← @anthropic-ai/sdk wrapper
-  prompt-builder.js     ← assembles Claude prompts
-  strategy-selector.js  ← routes AI vs RULES path
+  claude-client.js        ← @anthropic-ai/sdk wrapper
+  prompt-builder.js       ← assembles Claude prompts (supports all 4 strategy leg shapes)
+  strategy-selector.js    ← routes AI vs RULES path
+  strategy-allocator.js   ← enforces MAX_CONCURRENT_POSITIONS, STRATEGY_CAPITAL_PCT, per-strategy breakers
 
 /monitoring
   position-tracker.js   ← real-time position monitoring
@@ -78,6 +90,36 @@ config.js               ← all constants and flags (secrets via .env only)
 index.js                ← app entry point / boot sequence
 .env.example            ← all required keys listed, values empty
 holidays.json           ← NSE market holidays list
+
+/snapshots              ← daily options chain NDJSON files (git-ignored, written by snapshot-store.js)
+/backtest               ← Phase 7: candle replayer, options replayer, runner, report
+/analytics              ← Phase 7: SQLite query helpers
+/strategies/equity      ← Phase 6: equity directional strategies (separate from options)
+```
+
+---
+
+## Commands
+
+```bash
+# Run the system
+npm start                    # production
+npm run dev                  # NODE_ENV=development
+
+# Phase test suites
+npm run test:phase0          # node test-phase0.js
+npm run test:phase1          # node test-phase1.js
+npm run test:phase2          # 6 test files sequentially
+npm run test:phase3          # node test-phase3.js
+npm run test:phase4          # 3 test files: strategies (76), allocator (28), integration (31)
+npm run test:phase5          # Phase 5 (once built)
+npm run test:phase7          # Phase 7 (once built)
+node backtest.js --strategy iron-condor --from 2026-01-01 --to 2026-04-01  # Phase 7
+
+# Ad-hoc tests
+node tests/test-nse.js             # verify NSE data source connectivity
+node tests/test-dhan.js            # verify Dhan WebSocket connectivity
+node tests/dhan-api-test.js        # Dhan REST API smoke test
 ```
 
 ---
@@ -163,12 +205,27 @@ MAX_TRADES_PER_DAY: 3
 MAX_DAILY_LOSS: 5000            // rupees
 CONSECUTIVE_LOSS_PAUSE: 3
 ABSOLUTE_PNL_STOP_PCT: 0.50     // 50% of max loss → immediate exit
-CLAUDE_MODEL: "claude-sonnet-4-5"
+CLAUDE_MODEL: "claude-sonnet-4-6"
 VIX_SAFE_MAX: 22
 VIX_DANGER: 25
 CANDLE_TIMEFRAMES: [1, 5, 15]   // minutes
 OPTIONS_CHAIN_INTERVAL: 15      // minutes
 WEBSOCKET_RECONNECT_TIMEOUT: 30 // seconds
+
+// Phase 4 additions
+ACTIVE_STRATEGIES: ["iron-condor"]  // comma-separated in .env; matches kebab-case filenames
+STRATEGY_SELECTION_MODE: "FIRST_MATCH"  // "FIRST_MATCH" | "BEST_SCORE" | "ALL_PASSING"
+MAX_CONCURRENT_POSITIONS: 1
+STRATEGY_CAPITAL_PCT: {             // per-strategy fraction of MAX_DAILY_LOSS
+  "iron-condor": 1.0,
+  "bull-put-spread": 0.5,
+  "bear-call-spread": 0.5,
+  "straddle": 0.4
+}
+
+// Pre-Phase 5 additions
+ANTI_HUNT_VOLUME_REQUIRED: true     // false = skip Rule 3 volume check (use when DATA_SOURCE=NSE)
+ANTI_HUNT_DANGEROUS_WINDOW_MODE: "BLOCK_ALL"  // "BLOCK_ALL" | "SUPPRESS_FIRST"
 ```
 
 ---
@@ -297,6 +354,17 @@ After completing each phase, create `PHASE_X_COMPLETE.md` containing:
 - What each file does
 - How to run the test script
 - Known limitations
+
+---
+
+## Known Limitations (Phase 4 — fixed in Pre-Phase 5)
+
+- **StateMachine is a singleton** — being refactored to per-position in Pre-Phase 5 Block 2
+- **strategy-allocator not wired in `index.js`** — fixed in Pre-Phase 5 Block 2
+- **Sequential leg placement in DhanExecutor** — being replaced with basket orders in Pre-Phase 5 Block 1
+- **No startup order reconciliation** — added in Pre-Phase 5 Block 3
+- **Anti-hunt Rule 3 always skips in NSE mode** (volume=0) — `ANTI_HUNT_VOLUME_REQUIRED` config knob added in Pre-Phase 5 Block 4
+- **Claude prompts for non-IC strategies untested end-to-end** — deferred to Phase 5 integration testing
 
 ---
 

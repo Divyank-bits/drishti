@@ -23,6 +23,23 @@ const config = {
   CONFIDENCE_THRESHOLD: 0.70,   // Claude confidence minimum to act
   MATCH_SCORE_THRESHOLD: 65,    // rule engine score minimum (0-100)
 
+  // ── Multi-Strategy (Phase 4) ──────────────────────────────────────────────
+  ACTIVE_STRATEGIES: (process.env.ACTIVE_STRATEGIES || 'iron-condor').split(',').map(s => s.trim()),
+  // STRATEGY_SELECTION_MODE: how to pick among passing strategies each cycle
+  //   FIRST_MATCH  — execute first strategy whose rules pass (registry order = priority)
+  //   BEST_SCORE   — score all passing strategies, execute highest scorer
+  //   ALL_PASSING  — execute every passing strategy up to MAX_CONCURRENT_POSITIONS
+  STRATEGY_SELECTION_MODE: process.env.STRATEGY_SELECTION_MODE || 'FIRST_MATCH',
+  MAX_CONCURRENT_POSITIONS: 2,  // hard cap on simultaneous open positions across all strategies
+  // Per-strategy capital allocation cap as fraction of total daily risk budget (0–1)
+  // Keyed by strategy name matching the ACTIVE_STRATEGIES entries
+  STRATEGY_CAPITAL_PCT: {
+    'iron-condor':      1.0,    // 100% — sole strategy by default
+    'bull-put-spread':  0.5,
+    'bear-call-spread': 0.5,
+    'straddle':         0.4,
+  },
+
   // ── Trade & Risk Limits ───────────────────────────────────────────────────
   MAX_TRADES_PER_DAY: 3,
   MAX_DAILY_LOSS: 5000,           // rupees — daily loss circuit breaker

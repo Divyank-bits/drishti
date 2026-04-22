@@ -1,8 +1,10 @@
 /**
  * @file position-tracker.js
- * @description Monitors an active Iron Condor position. Starts after ORDER_FILLED,
+ * @description Monitors active positions across all strategies. Starts after ORDER_FILLED,
  *              calls anti-hunt.evaluate() on each CANDLE_CLOSE_15M, handles square-off,
  *              and manages the full exit lifecycle through to TRADE_CLOSED.
+ *              Phase 4: positions are keyed by strategyId; per-strategy and aggregate
+ *              P&L are tracked and included in POSITION_UPDATED payloads.
  */
 'use strict';
 
@@ -42,6 +44,10 @@ class PositionTracker {
     this._ceDelta       = null;
     this._peDelta       = null;
 
+    // Phase 4: per-strategy realised P&L for the current session
+    // Map<strategyName, number>
+    this._strategyPnl = new Map();
+
     eventBus.on(EVENTS.ORDER_FILLED,               (fill)    => this._onFill(fill));
     eventBus.on(EVENTS.TICK_RECEIVED,              ({ ltp }) => this._onTick(ltp));
     eventBus.on(EVENTS.CANDLE_CLOSE_15M,           (candle)  => this._onCandle(candle));
@@ -53,6 +59,24 @@ class PositionTracker {
     });
     eventBus.on(EVENTS.EXIT_TRIGGERED,             ()        => this._exit('Manual/circuit exit'));
     eventBus.on(EVENTS.MANUAL_SQUAREOFF_REQUESTED, ()        => this._exit('Manual square-off via Telegram'));
+  }
+
+  /**
+   * Returns per-strategy realised P&L map for the session.
+   * @returns {Map<string, number>}
+   */
+  getStrategyPnl() {
+    return new Map(this._strategyPnl);
+  }
+
+  /**
+   * Returns aggregate realised P&L across all strategies this session.
+   * @returns {number}
+   */
+  getAggregatePnl() {
+    let total = 0;
+    for (const pnl of this._strategyPnl.values()) total += pnl;
+    return total;
   }
 
   _onFill(fill) {
@@ -70,17 +94,20 @@ class PositionTracker {
     stateMachine.transition('AWAITING_APPROVAL');
     stateMachine.transition('ORDER_PLACING');
     stateMachine.transition('ACTIVE');
-    log('INFO', `Monitoring position ${fill.orderId} — premium ₹${fill.premiumCollected}`);
-    journal.write('ORDER_FILLED', { legs: fill.legs, premiumCollected: fill.premiumCollected });
+    log('INFO', `Monitoring position ${fill.orderId} [${fill.strategy || 'unknown'}] — premium ₹${fill.premiumCollected}`);
+    journal.write('ORDER_FILLED', { legs: fill.legs, premiumCollected: fill.premiumCollected, strategy: fill.strategy });
   }
 
   _onTick(ltp) {
     if (!this._activeFill || this._exiting) return;
     eventBus.emit(EVENTS.POSITION_UPDATED, {
-      orderId:       this._activeFill.orderId,
-      unrealisedPnl: this._lastKnownPnl,
+      orderId:        this._activeFill.orderId,
+      strategy:       this._activeFill.strategy || 'unknown',
+      unrealisedPnl:  this._lastKnownPnl,
+      strategyPnl:    Object.fromEntries(this._strategyPnl),
+      aggregatePnl:   this.getAggregatePnl(),
       ltp,
-      timestamp:     Date.now(),
+      timestamp:      Date.now(),
     });
   }
 
@@ -175,13 +202,22 @@ class PositionTracker {
       const exitResult = await executor.exitOrder(this._activeFill.orderId);
       const duration   = Math.round((Date.now() - this._entryTime) / 1000);
 
-      journal.write('ORDER_EXITED', { exitPrices: exitResult.legs, realisedPnl: exitResult.realisedPnl });
-      journal.write('TRADE_CLOSED', { realisedPnl: exitResult.realisedPnl, duration, reasoning: null });
+      const strategyName = this._activeFill.strategy || 'unknown';
+
+      // Accumulate per-strategy realised P&L
+      const prev = this._strategyPnl.get(strategyName) || 0;
+      this._strategyPnl.set(strategyName, prev + exitResult.realisedPnl);
+
+      journal.write('ORDER_EXITED', { exitPrices: exitResult.legs, realisedPnl: exitResult.realisedPnl, strategy: strategyName });
+      journal.write('TRADE_CLOSED', { realisedPnl: exitResult.realisedPnl, duration, reasoning: null, strategy: strategyName });
 
       stateMachine.transition('CLOSED');
       eventBus.emit(EVENTS.POSITION_CLOSED, {
-        orderId:     this._activeFill.orderId,
-        realisedPnl: exitResult.realisedPnl,
+        orderId:      this._activeFill.orderId,
+        strategy:     strategyName,
+        realisedPnl:  exitResult.realisedPnl,
+        strategyPnl:  Object.fromEntries(this._strategyPnl),
+        aggregatePnl: this.getAggregatePnl(),
         duration,
         reason,
       });

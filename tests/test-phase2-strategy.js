@@ -14,7 +14,7 @@ function test(name, fn) {
 
 console.log('\n── Iron Condor Strategy Tests ───────────────────────────────────\n');
 
-const IronCondor = require('./strategies/iron-condor.strategy');
+const IronCondor = require('../strategies/iron-condor.strategy');
 
 function passingSnapshot() {
   return {

@@ -13,6 +13,11 @@
  *                5. claude_api          — Claude API unavailable
  *                6. absolute_pnl_stop   — position loss > 50% of max daily loss
  *                7. manual_pause        — /pause command from Telegram
+ *
+ *              Phase 4: per-strategy daily loss limit (checkStrategyDailyLoss).
+ *                Tripping a strategy breaker blocks only that strategy — it does NOT
+ *                set isTripped() true and does not affect other strategies.
+ *                Each strategy gets MAX_DAILY_LOSS * STRATEGY_CAPITAL_PCT as its cap.
  */
 
 const eventBus = require('./event-bus');
@@ -34,6 +39,11 @@ class CircuitBreaker {
       absolute_pnl_stop:    { triggered: false, reason: null, triggeredAt: null },
       manual_pause:         { triggered: false, reason: null, triggeredAt: null },
     };
+
+    // Phase 4: per-strategy daily loss breakers — keyed by strategy name.
+    // Tripping one does NOT affect isTripped() — other strategies continue unaffected.
+    // Map<strategyName, { triggered, reason, triggeredAt }>
+    this._strategyBreakers = new Map();
   }
 
   // ── Internal trip helper ─────────────────────────────────────────────────
@@ -195,6 +205,74 @@ class CircuitBreaker {
     return Object.entries(this._breakers)
       .filter(([, b]) => b.triggered)
       .map(([name, b]) => ({ name, reason: b.reason, triggeredAt: b.triggeredAt }));
+  }
+
+  // ── Per-strategy breakers (Phase 4) ─────────────────────────────────────
+
+  /**
+   * Breaker 8 (per-strategy): Trip if a single strategy's realised loss for the
+   * day exceeds its capital allocation cap. Blocks only that strategy — does NOT
+   * trip isTripped() and does not affect other strategies.
+   *
+   * Cap = MAX_DAILY_LOSS * STRATEGY_CAPITAL_PCT[strategyName]
+   * Falls back to MAX_DAILY_LOSS if strategy is not in the PCT map.
+   *
+   * @param {string} strategyName
+   * @param {number} strategyLossToday - Realised loss for this strategy today (positive number)
+   */
+  checkStrategyDailyLoss(strategyName, strategyLossToday) {
+    const pct = config.STRATEGY_CAPITAL_PCT?.[strategyName] ?? 1.0;
+    const cap = config.MAX_DAILY_LOSS * pct;
+
+    if (strategyLossToday >= cap) {
+      if (this._strategyBreakers.get(strategyName)?.triggered) return; // already tripped
+
+      const reason = `${strategyName} daily loss ₹${strategyLossToday.toFixed(0)} exceeded cap ₹${cap.toFixed(0)}`;
+      const ts = new Date().toTimeString().slice(0, 8);
+      console.error(`[${ts}] [CircuitBreaker] [ERROR] STRATEGY TRIPPED: ${strategyName} — ${reason}`);
+
+      this._strategyBreakers.set(strategyName, {
+        triggered:   true,
+        reason,
+        triggeredAt: new Date().toISOString(),
+      });
+
+      eventBus.emit(EVENTS.CIRCUIT_BREAKER_HIT, {
+        breakerName: `strategy_daily_loss:${strategyName}`,
+        reason,
+        timestamp:   new Date().toISOString(),
+      });
+    }
+  }
+
+  /**
+   * Returns true if a specific strategy's daily loss breaker is tripped.
+   * Used by strategy-allocator to block a single strategy while others continue.
+   * @param {string} strategyName
+   * @returns {boolean}
+   */
+  isStrategyTripped(strategyName) {
+    return this._strategyBreakers.get(strategyName)?.triggered === true;
+  }
+
+  /**
+   * Resets a per-strategy breaker. Called at start of new trading day.
+   * @param {string} strategyName
+   */
+  resetStrategy(strategyName) {
+    if (!this._strategyBreakers.has(strategyName)) return;
+    this._strategyBreakers.delete(strategyName);
+    const ts = new Date().toTimeString().slice(0, 8);
+    console.log(`[${ts}] [CircuitBreaker] [INFO] Strategy breaker reset: ${strategyName}`);
+  }
+
+  /**
+   * Resets all per-strategy breakers. Called at start of new trading day alongside resetAll().
+   */
+  resetAllStrategyBreakers() {
+    this._strategyBreakers.clear();
+    const ts = new Date().toTimeString().slice(0, 8);
+    console.log(`[${ts}] [CircuitBreaker] [INFO] All strategy breakers reset for new session`);
   }
 
   // ── Reset ────────────────────────────────────────────────────────────────

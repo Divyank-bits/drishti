@@ -21,7 +21,7 @@ async function testAsync(name, fn) {
 
 console.log('\n── Trade Journal Tests ──────────────────────────────────────────\n');
 
-const TradeJournal = require('./journal/trade-journal');
+const TradeJournal = require('../journal/trade-journal');
 
 // Use a temp file for tests
 const tmpPath = path.join(os.tmpdir(), `drishti-test-journal-${Date.now()}.ndjson`);

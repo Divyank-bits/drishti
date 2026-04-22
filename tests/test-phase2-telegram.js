@@ -57,8 +57,8 @@ const stubBus      = new EventEmitter();
 const eventBusPath = require.resolve('./core/event-bus');
 require.cache[eventBusPath] = { id: eventBusPath, filename: eventBusPath, loaded: true, exports: stubBus };
 
-const TelegramNotifier = require('./notifications/telegram');
-const config           = require('./config');
+const TelegramNotifier = require('../notifications/telegram');
+const config           = require('../config');
 
 const AUTHORIZED_ID = 123456789;
 config.TELEGRAM_CHAT_ID = String(AUTHORIZED_ID);

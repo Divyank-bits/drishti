@@ -1,7 +1,7 @@
 // test-nse.js
-const nseSource = require('./data/sources/nse-source.js');
-const eventBus = require('./core/event-bus');
-const EVENTS = require('./core/events');
+const nseSource = require('../data/sources/nse-source.js');
+const eventBus = require('../core/event-bus');
+const EVENTS = require('../core/events');
 
 console.log("--- Starting NSE Source Test ---");
 

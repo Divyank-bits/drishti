@@ -75,7 +75,7 @@ function makeCandles(n = 5) {
 
 section('Gate 1 — claude-client module');
 
-const claudeClient = require('./intelligence/claude-client');
+const claudeClient = require('../intelligence/claude-client');
 
 ok('G1.1 module loads without throwing', true);
 ok('G1.2 isAvailable() returns boolean', typeof claudeClient.isAvailable() === 'boolean');
@@ -87,7 +87,7 @@ ok('G1.3 isAvailable() false when ANTHROPIC_API_KEY absent',
 
 section('Gate 2 — prompt-builder');
 
-const promptBuilder = require('./intelligence/prompt-builder');
+const promptBuilder = require('../intelligence/prompt-builder');
 
 const entryPrompt = promptBuilder.buildEntryPrompt(
   makeSignalPayload(), makeSessionCtx(), makeCandles()
@@ -110,9 +110,9 @@ ok('G2.7 hunt prompt contains strike', huntPrompt.includes('25500'));
 
 section('Gate 3 — strategy-selector (RULES mode)');
 
-const strategySelector = require('./intelligence/strategy-selector');
+const strategySelector = require('../intelligence/strategy-selector');
 // Mutate the live config object — all modules share the same cached reference.
-const config = require('./config');
+const config = require('../config');
 
 (async () => {
   const savedMode    = config.INTELLIGENCE_MODE;
@@ -170,7 +170,7 @@ const config = require('./config');
 
   section('Gate 5 — anti-hunt Rule 8 (no-Claude path)');
 
-  const antiHunt = require('./monitoring/anti-hunt');
+  const antiHunt = require('../monitoring/anti-hunt');
 
   // Force Claude unavailable
   claudeClient.isAvailable = () => false;

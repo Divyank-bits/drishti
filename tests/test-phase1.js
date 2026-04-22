@@ -22,7 +22,7 @@ function assert(condition, message) {
 // Wipe a module from require cache so each test starts with a fresh instance.
 // Also removes all eventBus listeners to prevent cross-test interference.
 function resetModules(...paths) {
-  const eventBus = require('./core/event-bus');
+  const eventBus = require('../core/event-bus');
   eventBus.removeAllListeners();
   paths.forEach((p) => {
     const resolved = require.resolve(p);
@@ -36,9 +36,9 @@ function resetModules(...paths) {
 // ── T16: correct OHLCV from tick sequence ─────────────────────────────────────
 await test('T16 CandleBuilder: tick sequence → correct 1m OHLCV', async () => {
   resetModules('./data/candle-builder');
-  const cb = require('./data/candle-builder');
-  const eventBus = require('./core/event-bus');
-  const EVENTS = require('./core/events');
+  const cb = require('../data/candle-builder');
+  const eventBus = require('../core/event-bus');
+  const EVENTS = require('../core/events');
 
   const received = [];
   eventBus.on(EVENTS.CANDLE_CLOSE_1M, (c) => received.push(c));
@@ -64,9 +64,9 @@ await test('T16 CandleBuilder: tick sequence → correct 1m OHLCV', async () => 
 // ── T17: event fires at minute boundary ───────────────────────────────────────
 await test('T17 CandleBuilder: CANDLE_CLOSE_1M fires at each minute boundary', async () => {
   resetModules('./data/candle-builder');
-  const cb = require('./data/candle-builder');
-  const eventBus = require('./core/event-bus');
-  const EVENTS = require('./core/events');
+  const cb = require('../data/candle-builder');
+  const eventBus = require('../core/event-bus');
+  const EVENTS = require('../core/events');
 
   let count = 0;
   eventBus.on(EVENTS.CANDLE_CLOSE_1M, () => count++);
@@ -83,9 +83,9 @@ await test('T17 CandleBuilder: CANDLE_CLOSE_1M fires at each minute boundary', a
 // ── T18: 5m and 15m boundaries ────────────────────────────────────────────────
 await test('T18 CandleBuilder: 5m and 15m candle boundaries align correctly', async () => {
   resetModules('./data/candle-builder');
-  const cb = require('./data/candle-builder');
-  const eventBus = require('./core/event-bus');
-  const EVENTS = require('./core/events');
+  const cb = require('../data/candle-builder');
+  const eventBus = require('../core/event-bus');
+  const EVENTS = require('../core/events');
 
   let c5 = 0, c15 = 0;
   eventBus.on(EVENTS.CANDLE_CLOSE_5M,  () => c5++);
@@ -107,7 +107,7 @@ await test('T18 CandleBuilder: 5m and 15m candle boundaries align correctly', as
 // ── T19: buffer capped at CANDLE_HISTORY_SIZE ─────────────────────────────────
 await test('T19 CandleBuilder: buffer capped at 200, oldest entry dropped', async () => {
   resetModules('./data/candle-builder');
-  const cb = require('./data/candle-builder');
+  const cb = require('../data/candle-builder');
 
   const candles = Array.from({ length: 205 }, (_, i) => ({
     open: 24000 + i, high: 24010 + i, low: 23990 + i,
@@ -126,10 +126,10 @@ await test('T19 CandleBuilder: buffer capped at 200, oldest entry dropped', asyn
 // ── T20: RSI correct from known series ────────────────────────────────────────
 await test('T20 IndicatorEngine: RSI correct from known price series', async () => {
   resetModules('./data/candle-builder', './data/indicator-engine');
-  const cb  = require('./data/candle-builder');
-  require('./data/indicator-engine');       // wires its own listeners as side-effect
-  const eventBus = require('./core/event-bus');
-  const EVENTS   = require('./core/events');
+  const cb  = require('../data/candle-builder');
+  require('../data/indicator-engine');       // wires its own listeners as side-effect
+  const eventBus = require('../core/event-bus');
+  const EVENTS   = require('../core/events');
   const { RSI }  = require('technicalindicators');
 
   const closes = [24000,24050,24020,24080,24060,24100,24090,24130,24110,24150,
@@ -158,10 +158,10 @@ await test('T20 IndicatorEngine: RSI correct from known price series', async () 
 // ── T21: EMA9 and EMA21 correct ───────────────────────────────────────────────
 await test('T21 IndicatorEngine: EMA9 and EMA21 correct from known series', async () => {
   resetModules('./data/candle-builder', './data/indicator-engine');
-  const cb  = require('./data/candle-builder');
-  require('./data/indicator-engine');
-  const eventBus = require('./core/event-bus');
-  const EVENTS   = require('./core/events');
+  const cb  = require('../data/candle-builder');
+  require('../data/indicator-engine');
+  const eventBus = require('../core/event-bus');
+  const EVENTS   = require('../core/events');
   const { EMA }  = require('technicalindicators');
 
   const closes = [24000,24050,24020,24080,24060,24100,24090,24130,24110,24150,
@@ -194,10 +194,10 @@ await test('T21 IndicatorEngine: EMA9 and EMA21 correct from known series', asyn
 // ── T22: MACD correct ─────────────────────────────────────────────────────────
 await test('T22 IndicatorEngine: MACD correct from known series', async () => {
   resetModules('./data/candle-builder', './data/indicator-engine');
-  const cb  = require('./data/candle-builder');
-  require('./data/indicator-engine');
-  const eventBus = require('./core/event-bus');
-  const EVENTS   = require('./core/events');
+  const cb  = require('../data/candle-builder');
+  require('../data/indicator-engine');
+  const eventBus = require('../core/event-bus');
+  const EVENTS   = require('../core/events');
   const { MACD } = require('technicalindicators');
 
   // Need 35+ candles for MACD(12,26,9)
@@ -235,10 +235,10 @@ await test('T22 IndicatorEngine: MACD correct from known series', async () => {
 // ── T23: Bollinger Band width correct ─────────────────────────────────────────
 await test('T23 IndicatorEngine: Bollinger Band width correct', async () => {
   resetModules('./data/candle-builder', './data/indicator-engine');
-  const cb  = require('./data/candle-builder');
-  require('./data/indicator-engine');
-  const eventBus        = require('./core/event-bus');
-  const EVENTS          = require('./core/events');
+  const cb  = require('../data/candle-builder');
+  require('../data/indicator-engine');
+  const eventBus        = require('../core/event-bus');
+  const EVENTS          = require('../core/events');
   const { BollingerBands } = require('technicalindicators');
 
   const closes = Array.from({ length: 25 }, (_, i) =>
@@ -269,10 +269,10 @@ await test('T23 IndicatorEngine: Bollinger Band width correct', async () => {
 // ── T24: null when buffer too small (warm-up) ─────────────────────────────────
 await test('T24 IndicatorEngine: returns null for all indicators when buffer < minimum', async () => {
   resetModules('./data/candle-builder', './data/indicator-engine');
-  const cb = require('./data/candle-builder');
-  require('./data/indicator-engine');
-  const eventBus = require('./core/event-bus');
-  const EVENTS   = require('./core/events');
+  const cb = require('../data/candle-builder');
+  require('../data/indicator-engine');
+  const eventBus = require('../core/event-bus');
+  const EVENTS   = require('../core/events');
 
   // Only 5 candles — below every indicator's minimum
   const candles = Array.from({ length: 5 }, (_, i) => ({
@@ -295,9 +295,9 @@ await test('T24 IndicatorEngine: returns null for all indicators when buffer < m
 // ── T25: dayOpen set once, dayHigh/dayLow track running extremes ──────────────
 await test('T25 SessionContext: dayOpen set on first tick only, high/low track all ticks', async () => {
   resetModules('./core/session-context');
-  const eventBus = require('./core/event-bus');
-  const EVENTS   = require('./core/events');
-  const SessionContext = require('./core/session-context');
+  const eventBus = require('../core/event-bus');
+  const EVENTS   = require('../core/events');
+  const SessionContext = require('../core/session-context');
   const ctx = new SessionContext();
 
   eventBus.emit(EVENTS.TICK_RECEIVED, { ltp: 24100, volume: 100, timestamp: Date.now() });
@@ -312,9 +312,9 @@ await test('T25 SessionContext: dayOpen set on first tick only, high/low track a
 // ── T26: firstHourComplete set at 10:15 IST candle ───────────────────────────
 await test('T26 SessionContext: firstHourComplete set true at 10:15 IST candle close', async () => {
   resetModules('./core/session-context');
-  const eventBus = require('./core/event-bus');
-  const EVENTS   = require('./core/events');
-  const SessionContext = require('./core/session-context');
+  const eventBus = require('../core/event-bus');
+  const EVENTS   = require('../core/events');
+  const SessionContext = require('../core/session-context');
   const ctx = new SessionContext();
 
   // 09:15 IST = 03:45 UTC
@@ -355,7 +355,7 @@ await test('T27 Historical: seeds CandleBuilder from cache when HTTP sources fai
   const path = require('path');
 
   resetModules('./data/historical', './data/candle-builder');
-  const cb = require('./data/candle-builder');
+  const cb = require('../data/candle-builder');
 
   // Write a known fake cache file
   const cachePath = path.join(__dirname, 'data/cache/nifty-15m.json');
@@ -367,7 +367,7 @@ await test('T27 Historical: seeds CandleBuilder from cache when HTTP sources fai
   fs.writeFileSync(cachePath, JSON.stringify(fakeCandles));
 
   // Load historical with a fake HTTP client that always rejects
-  const historical = require('./data/historical');
+  const historical = require('../data/historical');
   historical._http = { get: () => Promise.reject(new Error('Simulated network failure')) };
 
   let seeded = 0;
@@ -388,7 +388,7 @@ await test('T27 Historical: seeds CandleBuilder from cache when HTTP sources fai
 // ── T28: OptionsChain parser produces correct shape from fake NSE response ────
 await test('T28 OptionsChain: _parseOptionChain() produces correct shape from fake NSE JSON', async () => {
   resetModules('./data/options-chain');
-  const oc = require('./data/options-chain');
+  const oc = require('../data/options-chain');
 
   // Fake NSE response matching stock-nse-india library shape:
   // filtered.data = pre-filtered legs for the nearest expiry

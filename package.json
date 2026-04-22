@@ -6,9 +6,11 @@
   "scripts": {
     "start": "node index.js",
     "dev": "NODE_ENV=development node index.js",
-    "test:phase0": "node test-phase0.js",
-    "test:phase1": "node test-phase1.js",
-    "test:phase2": "node test-phase2-executor.js && node test-phase2-journal.js && node test-phase2-strategy.js && node test-phase2-antihunt.js && node test-phase2-telegram.js && node test-phase2-integration.js"
+    "test:phase0": "node tests/test-phase0.js",
+    "test:phase1": "node tests/test-phase1.js",
+    "test:phase2": "node tests/test-phase2-executor.js && node tests/test-phase2-journal.js && node tests/test-phase2-strategy.js && node tests/test-phase2-antihunt.js && node tests/test-phase2-telegram.js && node tests/test-phase2-integration.js",
+    "test:phase3": "node tests/test-phase3.js",
+    "test:phase4": "node tests/test-phase4-strategies.js && node tests/test-phase4-allocator.js && node tests/test-phase4-integration.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
