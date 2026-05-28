@@ -34,7 +34,8 @@ class TelegramNotifier {
   start(BotClass) {
     const Bot          = BotClass || require('node-telegram-bot-api');
     this._bot          = new Bot(config.TELEGRAM_BOT_TOKEN || 'TEST_TOKEN', { polling: true });
-    this._authorizedId = parseInt(config.TELEGRAM_CHAT_ID, 10);
+    this._authorizedId  = parseInt(config.TELEGRAM_CHAT_ID, 10);
+    this._authorizedIds = new Set(config.TELEGRAM_AUTHORIZED_USER_IDS || [this._authorizedId]);
     this._registerInbound();
     this._registerOutbound();
     this._setCommandMenu();
@@ -58,7 +59,7 @@ class TelegramNotifier {
 
   _registerInbound() {
     this._bot.on('message', (msg) => {
-      if (msg.from.id !== this._authorizedId) return;  // silently ignore unauthorized
+      if (!this._authorizedIds.has(msg.from.id)) return;  // silently ignore unauthorized
 
       const text   = (msg.text || '').trim();
       const chatId = msg.chat.id;
