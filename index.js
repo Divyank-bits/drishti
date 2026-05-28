@@ -79,10 +79,11 @@ async function boot() {
   const sessionContext = SessionContext.shared;
   log('INFO', 'SessionContext', `Session initialised for ${sessionContext.snapshot().date}`);
 
-  // ── Step 5: Strategy registry ─────────────────────────────────────────────
-  // Registry auto-discovers strategies on require() — just import it.
-  const registry = require('./strategies/registry');
-  log('INFO', 'Registry', `${registry.count} strategy/strategies available`);
+  // ── Step 5: Strategy registry + per-strategy StateMachines ──────────────────
+  const registry   = require('./strategies/registry');
+  const allocator  = require('./intelligence/strategy-allocator');
+  allocator.injectStateMachines(registry.getAll());
+  log('INFO', 'Registry', `${registry.count} strategy/strategies loaded — StateMachines injected`);
 
   // ── Step 5b: System ready ─────────────────────────────────────────────────
   const summary = {
@@ -111,7 +112,9 @@ async function boot() {
   await historical.fetch();
   log('INFO', 'Historical', 'Startup candles loaded');
 
-  // Step 6b: Start options chain polling
+  // Step 6b: Start options chain polling + snapshot collection
+  const snapshotStore = require('./data/snapshot-store');
+  eventBus.on(EVENTS.OPTIONS_CHAIN_UPDATED, (payload) => snapshotStore.write(payload));
   optionsChain.start();
   log('INFO', 'OptionsChain', `Polling every ${config.OPTIONS_CHAIN_INTERVAL}m`);
 
@@ -128,13 +131,50 @@ async function boot() {
     log('INFO', 'Boot', `Restored: pnlToday=₹${pnlToday}, tradesToday=${tradesToday}`);
   }
 
-  config.EXECUTION_MODE === 'LIVE'
+  const executor = config.EXECUTION_MODE === 'LIVE'
     ? require('./execution/dhan-executor')
     : require('./execution/paper-executor');
   require('./strategies/iron-condor.strategy');
   require('./monitoring/position-tracker');
 
   telegram.start();
+
+  // ── Step 7b: Startup order reconciliation (LIVE mode only) ───────────────
+  if (config.EXECUTION_MODE === 'LIVE') {
+    try {
+      const openOrderIds = await journal.getOpenOrderIds();
+      const reconciliation = await executor.reconcile({ openOrderIds });
+
+      if (!reconciliation.clean) {
+        const orphanCount = reconciliation.orphanedOrders.length;
+        const orphanLines = reconciliation.orphanedOrders
+          .map(o => `  • orderId=${o.orderId} status=${o.orderStatus} security=${o.securityId || '?'}`)
+          .join('\n');
+
+        const alertText =
+          `*⚠️ Boot Reconciliation — Orphaned Orders Detected*\n` +
+          `${orphanCount} Dhan order(s) not in journal:\n${orphanLines}\n\n` +
+          `New entries are *BLOCKED* until you resolve and send /resume`;
+
+        log('ERROR', 'Reconciliation', `${orphanCount} orphaned order(s) found — blocking new entries`);
+
+        // Block new entries by pausing the circuit breaker pause mechanism
+        eventBus.emit(EVENTS.PAUSE_REQUESTED, { reason: 'boot_reconciliation_orphans' });
+
+        // Alert via Telegram (bot must be started first for this to send)
+        telegram.sendAlert(alertText);
+      } else {
+        log('INFO', 'Reconciliation', 'Clean — no orphaned or missing orders');
+      }
+    } catch (err) {
+      log('WARN', 'Reconciliation', `Failed to reconcile orders: ${err.message} — proceeding without reconciliation`);
+    }
+  }
+
+  // ── Phase 5: Deep scan / watchlist ───────────────────────────────────────
+  journal.hookScanEvents();
+  require('./intelligence/scan-scheduler').start();
+  log('INFO', 'ScanScheduler', `Started — symbols: ${config.WATCHLIST_SYMBOLS.join(',')}`);
 
   // ── Phase 3: Intelligence layer ───────────────────────────────────────────
   const claudeClient = require('./intelligence/claude-client');

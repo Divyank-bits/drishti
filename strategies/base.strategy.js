@@ -115,6 +115,41 @@ class BaseStrategy {
     throw new Error(`[${this.constructor.name}] validatePartialFill() must be implemented`);
   }
 
+  // ── Signal timeframe ─────────────────────────────────────────────────────
+
+  /**
+   * Candle timeframe (minutes) this strategy uses for signal evaluation.
+   * Iron Condor stays on 15m (needs confirmed neutrality).
+   * Directional strategies override to 5m for faster entry.
+   * Anti-hunt in position-tracker always stays on 15m regardless.
+   * @returns {number} 5 | 15
+   */
+  get signalTimeframe() {
+    return 15;
+  }
+
+  // ── StateMachine injection ────────────────────────────────────────────────
+
+  /**
+   * Called by strategy-allocator during boot to inject this strategy's
+   * dedicated StateMachine instance. Strategies must not create their own.
+   * @param {PositionStateMachine} sm
+   */
+  setStateMachine(sm) {
+    this._stateMachine = sm;
+  }
+
+  /**
+   * Returns the injected StateMachine, or throws if not yet injected.
+   * @returns {PositionStateMachine}
+   */
+  getStateMachine() {
+    if (!this._stateMachine) {
+      throw new Error(`[${this.constructor.name}] StateMachine not injected — call setStateMachine() first`);
+    }
+    return this._stateMachine;
+  }
+
   // ── Helper available to all strategies ───────────────────────────────────
 
   /**

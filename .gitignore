@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Trade journal file
 journal/trades.ndjson
+
+# Options chain snapshots — accumulated for Phase 7 backtesting
+snapshots/

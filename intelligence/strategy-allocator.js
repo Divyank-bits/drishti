@@ -17,10 +17,11 @@
  */
 'use strict';
 
-const eventBus       = require('../core/event-bus');
-const EVENTS         = require('../core/events');
-const config         = require('../config');
-const CircuitBreaker = require('../core/circuit-breaker');
+const eventBus        = require('../core/event-bus');
+const EVENTS          = require('../core/events');
+const config          = require('../config');
+const CircuitBreaker  = require('../core/circuit-breaker');
+const StateMachine    = require('../core/state-machine');
 
 const circuitBreaker = new CircuitBreaker();
 
@@ -34,6 +35,8 @@ class StrategyAllocator {
     // Tracks how many positions are currently open, keyed by strategy name
     this._openPositions = new Map(); // strategyName → count (0 or 1 for now)
     this._totalOpen     = 0;
+    // Per-strategy StateMachine instances, injected by injectStateMachines()
+    this._stateMachines = new Map(); // strategyName → StateMachine
 
     eventBus.on(EVENTS.POSITION_ACTIVE, (payload) => {
       const name = payload.strategy || 'unknown';
@@ -49,6 +52,32 @@ class StrategyAllocator {
         this._totalOpen = Math.max(0, this._totalOpen - 1);
       }
     });
+  }
+
+  // ── StateMachine management ─────────────────────────────────────────────────
+
+  /**
+   * Creates one StateMachine per active strategy and injects it into each strategy
+   * instance. Called once during boot after the registry is loaded.
+   *
+   * @param {BaseStrategy[]} strategies - All active strategy instances from registry
+   */
+  injectStateMachines(strategies) {
+    for (const strategy of strategies) {
+      const sm = new StateMachine();
+      this._stateMachines.set(strategy.name, sm);
+      strategy.setStateMachine(sm);
+      log('INFO', `StateMachine injected → ${strategy.name}`);
+    }
+  }
+
+  /**
+   * Returns the StateMachine for a given strategy name, or null if not found.
+   * @param {string} strategyName
+   * @returns {StateMachine|null}
+   */
+  getStateMachine(strategyName) {
+    return this._stateMachines.get(strategyName) || null;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────

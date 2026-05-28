@@ -113,5 +113,109 @@ test('T13 normal position within all thresholds → shouldExit false, flagged fa
   assert.strictEqual(result.flagged, false);
 });
 
+// ── Block 4: ANTI_HUNT_VOLUME_REQUIRED=false ──────────────────────────────
+const config = require('../config');
+
+test('T14 VOLUME_REQUIRED=false: volume=0 + price breach → shouldExit true', () => {
+  const saved = config.ANTI_HUNT_VOLUME_REQUIRED;
+  config.ANTI_HUNT_VOLUME_REQUIRED = false;
+  try {
+    // 60pt CE breach, volume=0 — without the knob this would be treated as hunt (no exit)
+    const candle = makeCandle({ close: 24460, volume: 0 });
+    const result = antiHunt.evaluate(makePosition(), candle, makeContext());
+    assert.strictEqual(result.shouldExit, true, 'Should exit when volume gate is disabled');
+    assert.strictEqual(result.rule, 2);
+  } finally {
+    config.ANTI_HUNT_VOLUME_REQUIRED = saved;
+  }
+});
+
+test('T15 VOLUME_REQUIRED=false: low volume + price breach → shouldExit true', () => {
+  const saved = config.ANTI_HUNT_VOLUME_REQUIRED;
+  config.ANTI_HUNT_VOLUME_REQUIRED = false;
+  try {
+    // 60pt breach, low volume (400 < 1500) — normally blocked by Rule 3
+    const candle = makeCandle({ close: 24460, volume: 400 });
+    const result = antiHunt.evaluate(makePosition(), candle, makeContext());
+    assert.strictEqual(result.shouldExit, true, 'Low volume should not block exit when VOLUME_REQUIRED=false');
+  } finally {
+    config.ANTI_HUNT_VOLUME_REQUIRED = saved;
+  }
+});
+
+test('T16 VOLUME_REQUIRED=true (default): volume=0 + price breach → no exit', () => {
+  const saved = config.ANTI_HUNT_VOLUME_REQUIRED;
+  config.ANTI_HUNT_VOLUME_REQUIRED = true;
+  try {
+    const candle = makeCandle({ close: 24460, volume: 0 });
+    const result = antiHunt.evaluate(makePosition(), candle, makeContext());
+    assert.strictEqual(result.shouldExit, false, 'volume=0 should block exit when VOLUME_REQUIRED=true');
+  } finally {
+    config.ANTI_HUNT_VOLUME_REQUIRED = saved;
+  }
+});
+
+// ── Block 4: ANTI_HUNT_DANGEROUS_WINDOW_MODE=SUPPRESS_FIRST ──────────────
+// 09:20 IST = 03:50 UTC — inside dangerous window
+const DANGEROUS_CANDLE_TIME = new Date('2026-04-14T03:50:00.000Z').getTime();
+// 10:00 IST = 04:30 UTC — outside dangerous window
+const SAFE_CANDLE_TIME = new Date('2026-04-14T04:30:00.000Z').getTime();
+
+test('T17 SUPPRESS_FIRST: first breach in window sets flag, no exit', () => {
+  const saved = config.ANTI_HUNT_DANGEROUS_WINDOW_MODE;
+  config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = 'SUPPRESS_FIRST';
+  try {
+    const position = makePosition(); // fresh position, no _dangerousWindowBreach
+    const candle = makeCandle({ close: 24460, volume: 2000, openTime: DANGEROUS_CANDLE_TIME });
+    const result = antiHunt.evaluate(position, candle, makeContext());
+    assert.strictEqual(result.shouldExit, false, 'First breach must be suppressed');
+    assert.strictEqual(position._dangerousWindowBreach, true, 'Flag must be set on position');
+  } finally {
+    config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = saved;
+  }
+});
+
+test('T18 SUPPRESS_FIRST: second consecutive breach in window → exits', () => {
+  const saved = config.ANTI_HUNT_DANGEROUS_WINDOW_MODE;
+  config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = 'SUPPRESS_FIRST';
+  try {
+    // Position already flagged from first breach
+    const position = makePosition({ _dangerousWindowBreach: true });
+    const candle = makeCandle({ close: 24460, volume: 2000, openTime: DANGEROUS_CANDLE_TIME });
+    const result = antiHunt.evaluate(position, candle, makeContext());
+    assert.strictEqual(result.shouldExit, true, 'Second consecutive breach must exit');
+    assert.strictEqual(result.rule, 2);
+  } finally {
+    config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = saved;
+  }
+});
+
+test('T19 SUPPRESS_FIRST: flag clears when candle is outside dangerous window', () => {
+  const saved = config.ANTI_HUNT_DANGEROUS_WINDOW_MODE;
+  config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = 'SUPPRESS_FIRST';
+  try {
+    // Position had breach flag set, but next candle is outside the window
+    const position = makePosition({ _dangerousWindowBreach: true });
+    const candle = makeCandle({ close: 24350, openTime: SAFE_CANDLE_TIME }); // safe price, safe time
+    antiHunt.evaluate(position, candle, makeContext());
+    assert.strictEqual(position._dangerousWindowBreach, false, 'Flag must clear outside dangerous window');
+  } finally {
+    config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = saved;
+  }
+});
+
+test('T20 BLOCK_ALL (default): price breach in dangerous window → no exit', () => {
+  const saved = config.ANTI_HUNT_DANGEROUS_WINDOW_MODE;
+  config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = 'BLOCK_ALL';
+  try {
+    const position = makePosition({ _dangerousWindowBreach: true }); // even if flag set, BLOCK_ALL ignores it
+    const candle = makeCandle({ close: 24460, volume: 2000, openTime: DANGEROUS_CANDLE_TIME });
+    const result = antiHunt.evaluate(position, candle, makeContext());
+    assert.strictEqual(result.shouldExit, false, 'BLOCK_ALL must block all exits in window');
+  } finally {
+    config.ANTI_HUNT_DANGEROUS_WINDOW_MODE = saved;
+  }
+});
+
 console.log(`\n${passed + failed} tests — ${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);

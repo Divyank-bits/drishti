@@ -87,6 +87,30 @@ const config = {
   GST_RATE: 0.18,                 // 18% on brokerage + exchange charges
   STAMP_DUTY_RATE: 0.00003,       // 0.003% on buy side
 
+  // ── Phase 5 — Deep Scan / Watchlist ──────────────────────────────────────
+  // Comma-separated list of NSE FO symbols to scan (besides primary NIFTY)
+  WATCHLIST_SYMBOLS: (process.env.WATCHLIST_SYMBOLS || 'BANKNIFTY,FINNIFTY').split(',').map(s => s.trim()),
+  SCAN_INTERVAL_MINUTES: parseInt(process.env.SCAN_INTERVAL_MINUTES, 10) || 15,
+  SCAN_MAX_SYMBOLS: parseInt(process.env.SCAN_MAX_SYMBOLS, 10) || 10,
+  DEEP_SCAN_CONFIDENCE_THRESHOLD: parseFloat(process.env.DEEP_SCAN_CONFIDENCE_THRESHOLD) || 70,
+
+  // ── Phase 6 — Equity Directional Scan ────────────────────────────────────
+  // Comma-separated NSE F&O equity symbols to support via /scan SYMBOL
+  EQUITY_SCAN_SYMBOLS: (process.env.EQUITY_SCAN_SYMBOLS || 'RELIANCE,TCS,INFY').split(',').map(s => s.trim()),
+  // Timeframes (minutes) fetched and scored for each equity scan
+  EQUITY_SCAN_CANDLE_TIMEFRAMES: [1, 5, 15],
+  // Confluence score threshold (0–100) → CONFIRMED pattern
+  EQUITY_SCAN_CONFLUENCE_THRESHOLD: parseFloat(process.env.EQUITY_SCAN_CONFLUENCE_THRESHOLD) || 65,
+  // Confluence score threshold (0–100) → FORMING pattern (watch alert)
+  EQUITY_SCAN_FORMING_THRESHOLD: parseFloat(process.env.EQUITY_SCAN_FORMING_THRESHOLD) || 40,
+
+  // ── Anti-Hunt Config Knobs (Pre-Phase 5) ──────────────────────────────────
+  // When false, Rule 3 volume gate is skipped — required when DATA_SOURCE=NSE (volume is always 0)
+  ANTI_HUNT_VOLUME_REQUIRED: process.env.ANTI_HUNT_VOLUME_REQUIRED !== 'false',
+  // BLOCK_ALL: current behaviour — no exits during dangerous windows except Rule 6
+  // SUPPRESS_FIRST: hold on first breach in window; exit if next 15m candle also closes beyond buffer
+  ANTI_HUNT_DANGEROUS_WINDOW_MODE: process.env.ANTI_HUNT_DANGEROUS_WINDOW_MODE || 'BLOCK_ALL',
+
   // ── Paper Executor ────────────────────────────────────────────────────────
   SLIPPAGE_PER_LOT: 1.5,              // ₹ fixed slippage per lot — swap point for spread-based (Phase 3)
 

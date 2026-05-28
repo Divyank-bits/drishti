@@ -259,6 +259,50 @@ ok('getOpenCount("iron-condor") = 1', allocator.getOpenCount('iron-condor') === 
 ok('getOpenCount("straddle") = 0', allocator.getOpenCount('straddle') === 0);
 ok('getTotalOpen() = 1', allocator.getTotalOpen() === 1);
 
+// ── Per-position StateMachine — concurrent SIGNAL_DETECTED ───────────────────
+
+section('StateMachine — two strategies hold SIGNAL_DETECTED simultaneously');
+
+{
+  const StateMachine = require('../core/state-machine');
+
+  // Simulate what allocator.injectStateMachines() does at boot
+  const smIc  = new StateMachine();
+  const smBps = new StateMachine();
+
+  // Stub strategy objects (only need setStateMachine / getStateMachine from base)
+  const BaseStrategy = require('../strategies/base.strategy');
+  const icStub  = Object.create(BaseStrategy.prototype);
+  const bpsStub = Object.create(BaseStrategy.prototype);
+
+  icStub.setStateMachine(smIc);
+  bpsStub.setStateMachine(smBps);
+
+  // Both start IDLE
+  ok('iron-condor SM starts IDLE', icStub.getStateMachine().getCurrentState() === 'IDLE');
+  ok('bull-put-spread SM starts IDLE', bpsStub.getStateMachine().getCurrentState() === 'IDLE');
+
+  // Transition iron-condor to SIGNAL_DETECTED
+  icStub.getStateMachine().transition('SIGNAL_DETECTED');
+  ok('iron-condor transitions to SIGNAL_DETECTED', icStub.getStateMachine().getCurrentState() === 'SIGNAL_DETECTED');
+
+  // bull-put-spread is still IDLE — no collision
+  ok('bull-put-spread remains IDLE (no collision)', bpsStub.getStateMachine().getCurrentState() === 'IDLE');
+
+  // Transition bull-put-spread to SIGNAL_DETECTED independently
+  bpsStub.getStateMachine().transition('SIGNAL_DETECTED');
+  ok('bull-put-spread also transitions to SIGNAL_DETECTED', bpsStub.getStateMachine().getCurrentState() === 'SIGNAL_DETECTED');
+
+  // iron-condor is still SIGNAL_DETECTED — no interference
+  ok('iron-condor still SIGNAL_DETECTED (no interference)', icStub.getStateMachine().getCurrentState() === 'SIGNAL_DETECTED');
+
+  // Verify getStateMachine() throws if not injected
+  const uninjectStub = Object.create(BaseStrategy.prototype);
+  let threw = false;
+  try { uninjectStub.getStateMachine(); } catch (_) { threw = true; }
+  ok('getStateMachine() throws if StateMachine not injected', threw);
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(58)}`);

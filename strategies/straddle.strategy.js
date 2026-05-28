@@ -12,14 +12,12 @@ const BaseStrategy     = require('./base.strategy');
 const eventBus         = require('../core/event-bus');
 const EVENTS           = require('../core/events');
 const CircuitBreaker   = require('../core/circuit-breaker');
-const StateMachine     = require('../core/state-machine');
 const SessionContext   = require('../core/session-context');
 const config           = require('../config');
 const holidays         = require('../holidays.json');
 const strategySelector = require('../intelligence/strategy-selector');
 
 const circuitBreaker = new CircuitBreaker();
-const stateMachine   = new StateMachine();
 const sessionContext = new SessionContext();
 
 function log(level, msg) {
@@ -53,13 +51,14 @@ class StraddleStrategy extends BaseStrategy {
     this._paused           = false;
     this._evaluating       = false;
 
-    eventBus.on(EVENTS.CANDLE_CLOSE_15M, (candle) => {
+    const candleEvent = this.signalTimeframe === 5 ? EVENTS.CANDLE_CLOSE_5M : EVENTS.CANDLE_CLOSE_15M;
+    eventBus.on(candleEvent, (candle) => {
       this._candles15m.push(candle);
       if (this._candles15m.length > 20) this._candles15m.shift();
     });
 
     eventBus.on(EVENTS.INDICATORS_UPDATED, (payload) => {
-      if (payload.timeframe !== 15) return;
+      if (payload.timeframe !== this.signalTimeframe) return;
       this._cachedIndicators = payload.indicators;
       if (payload.indicators.bb?.width != null) {
         this._bbWidthHistory.push(payload.indicators.bb.width);
@@ -81,6 +80,8 @@ class StraddleStrategy extends BaseStrategy {
 
   get name() { return 'Straddle'; }
 
+  get signalTimeframe() { return 5; }
+
   get regime() { return ['B']; }
 
   get claudeDescription() {
@@ -96,7 +97,7 @@ class StraddleStrategy extends BaseStrategy {
     if (!this._cachedIndicators || !this._cachedOptions) return;
     if (this._paused) return;
     if (circuitBreaker.isTripped()) return;
-    if (stateMachine.getCurrentState() !== 'IDLE') return;
+    if (this.getStateMachine().getCurrentState() !== 'IDLE') return;
     if (this._evaluating) return;
 
     const snap = {
@@ -147,7 +148,7 @@ class StraddleStrategy extends BaseStrategy {
           return;
         }
 
-        stateMachine.transition('SIGNAL_DETECTED');
+        this.getStateMachine().transition('SIGNAL_DETECTED');
         eventBus.emit(EVENTS.SIGNAL_GENERATED, {
           ...signalPayload,
           intelligenceMode: decision.mode,

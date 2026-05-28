@@ -1,0 +1,97 @@
+{
+  "BHARTIARTL": {
+    "securityId": "10604",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "MARUTI": {
+    "securityId": "10999",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "LT": {
+    "securityId": "11483",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "TCS": {
+    "securityId": "11536",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "NTPC": {
+    "securityId": "11630",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "HDFCBANK": {
+    "securityId": "1333",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "HINDUNILVR": {
+    "securityId": "1394",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "INFY": {
+    "securityId": "1594",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "ITC": {
+    "securityId": "1660",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "KOTAKBANK": {
+    "securityId": "1922",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "ADANIENT": {
+    "securityId": "25",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "RELIANCE": {
+    "securityId": "2885",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "SBIN": {
+    "securityId": "3045",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "BAJFINANCE": {
+    "securityId": "317",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "SUNPHARMA": {
+    "securityId": "3351",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "TATASTEEL": {
+    "securityId": "3499",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "WIPRO": {
+    "securityId": "3787",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "ICICIBANK": {
+    "securityId": "4963",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  },
+  "AXISBANK": {
+    "securityId": "5900",
+    "exchangeSegment": "NSE",
+    "instrument": "EQUITY"
+  }
+}

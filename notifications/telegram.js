@@ -37,7 +37,21 @@ class TelegramNotifier {
     this._authorizedId = parseInt(config.TELEGRAM_CHAT_ID, 10);
     this._registerInbound();
     this._registerOutbound();
+    this._setCommandMenu();
     log('INFO', 'Telegram bot started');
+  }
+
+  _setCommandMenu() {
+    this._bot.setMyCommands([
+      { command: 'status',     description: 'Current position, P&L, regime' },
+      { command: 'mode',       description: 'Switch mode — /mode [AI|RULES|HYBRID]' },
+      { command: 'datasource', description: 'Switch data source — /datasource [NSE|DHAN]' },
+      { command: 'scan',       description: 'Equity scan — /scan SYMBOL [--claude|--confirm]' },
+      { command: 'pause',      description: 'Pause new trade entries' },
+      { command: 'resume',     description: 'Resume trade entries' },
+      { command: 'squareoff',  description: 'Manually square off all positions' },
+      { command: 'help',       description: 'Show all available commands' },
+    ]).catch(err => log('WARN', `setMyCommands failed: ${err.message}`));
   }
 
   // ── Inbound ───────────────────────────────────────────────────────────────
@@ -49,6 +63,23 @@ class TelegramNotifier {
       const text   = (msg.text || '').trim();
       const chatId = msg.chat.id;
 
+      if (text === '/help' || text === '/start') {
+        this._bot.sendMessage(chatId,
+          `*Drishti Commands*\n\n` +
+          `/status — position, P&L, regime\n` +
+          `/mode [AI|RULES|HYBRID] — switch intelligence mode\n` +
+          `/datasource [NSE|DHAN] — switch data source\n` +
+          `/scan SYMBOL — equity directional scan\n` +
+          `/scan SYMBOL --claude — scan with Claude analysis\n` +
+          `/scan SYMBOL --confirm — rules + Claude confirmation\n` +
+          `/pause — block new trade entries\n` +
+          `/resume — unblock entries\n` +
+          `/squareoff — manually exit all positions\n` +
+          `/help — show this message`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
       if (text === '/pause') {
         eventBus.emit(EVENTS.PAUSE_REQUESTED, {});
         this._bot.sendMessage(chatId, `Trading paused. New entries blocked.${footer()}`);
@@ -66,14 +97,133 @@ class TelegramNotifier {
       }
       if (text.startsWith('/mode')) {
         const mode = (text.split(' ')[1] || '').toUpperCase();
-        if (mode === 'RULES') {
-          config.INTELLIGENCE_MODE = 'RULES';
-          this._bot.sendMessage(chatId, `Switched to RULES mode.${footer()}`);
-        } else if (['AI', 'HYBRID'].includes(mode)) {
-          this._bot.sendMessage(chatId, `Mode ${mode} not yet implemented. Staying on RULES.${footer()}`);
+        if (['AI', 'RULES', 'HYBRID'].includes(mode)) {
+          config.INTELLIGENCE_MODE = mode;
+          this._bot.sendMessage(chatId, `Switched to ${mode} mode.${footer()}`);
         } else {
-          this._bot.sendMessage(chatId, `Usage: /mode [AI|RULES|HYBRID]${footer()}`);
+          this._bot.sendMessage(chatId, `Current mode: ${config.INTELLIGENCE_MODE}\nUsage: /mode [AI|RULES|HYBRID]${footer()}`);
         }
+        return;
+      }
+      if (text.startsWith('/datasource')) {
+        const src = (text.split(' ')[1] || '').toUpperCase();
+        if (['NSE', 'DHAN'].includes(src)) {
+          config.DATA_SOURCE = src;
+          this._bot.sendMessage(chatId, `Data source switched to ${src}. Note: restart required for tick stream to reconnect.${footer()}`);
+        } else {
+          this._bot.sendMessage(chatId, `Current data source: ${config.DATA_SOURCE}\nUsage: /datasource [NSE|DHAN]${footer()}`);
+        }
+        return;
+      }
+      if (text.startsWith('/scan')) {
+        const parts  = text.split(/\s+/);
+        const symbol = (parts[1] || '').toUpperCase() || null;
+        const flag   = (parts[2] || '').toLowerCase(); // '--claude' | '--confirm' | ''
+
+        if (!symbol) {
+          this._bot.sendMessage(chatId, `Usage: /scan SYMBOL [--claude|--confirm]\nExamples:\n  /scan BANKNIFTY\n  /scan RELIANCE\n  /scan RELIANCE --claude\n  /scan RELIANCE --confirm${footer()}`);
+          return;
+        }
+
+        // ── Equity directional scan (Phase 6) — non-index symbols ─────────────
+        const INDEX_SYMBOLS = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']);
+        if (!INDEX_SYMBOLS.has(symbol)) {
+          const mode = flag === '--claude' ? 'claude' : flag === '--confirm' ? 'confirm' : 'rules';
+          this._bot.sendMessage(chatId, `Scanning ${symbol} [equity, mode=${mode}]...${footer()}`);
+          const equityScanner = require('../intelligence/equity-scanner');
+          equityScanner.scan(symbol, mode)
+            .then((result) => {
+              if (result.error) {
+                this._bot.sendMessage(chatId, `Equity scan failed for ${symbol}: ${result.error}${footer()}`);
+                return;
+              }
+              const c   = result.confluence || {};
+              const ctx = result.context   || {};
+
+              const tfLine = c.timeframeScores
+                ? `15m: ${c.timeframeScores[15] ?? 0}%  5m: ${c.timeframeScores[5] ?? 0}%  1m: ${c.timeframeScores[1] ?? 0}%`
+                : 'N/A';
+
+              const stateEmoji = c.state === 'CONFIRMED' ? '✅' : c.state === 'FORMING' ? '⏳' : '—';
+
+              const lines = [
+                `*${symbol} — ${c.dominantPattern ?? 'No Pattern'} [${c.state ?? 'NONE'}]* ${stateEmoji}`,
+                `Direction: ${c.dominantDirection ?? 'N/A'}`,
+                `Confluence: ${c.score ?? 0}% (${tfLine})`,
+                ``,
+                `Price vs VWAP: ${ctx.vwap != null ? (result.context ? 'see levels' : 'N/A') : 'N/A'}`,
+                `Key Levels: PDH ${ctx.prevDayHigh ?? 'N/A'} | PDL ${ctx.prevDayLow ?? 'N/A'} | Day Open ${ctx.dayOpen ?? 'N/A'}`,
+                `VWAP: ${ctx.vwap != null ? ctx.vwap.toFixed(2) : 'N/A'}`,
+              ];
+
+              // Top signals per timeframe
+              const sigMap = {};
+              for (const sr of (result.strategyResults || [])) {
+                if (sr.signals && sr.signals.length > 0) {
+                  sigMap[sr.timeframe] = sigMap[sr.timeframe] || [];
+                  sigMap[sr.timeframe].push(`${sr.strategy}: ${sr.signals[0]}`);
+                }
+              }
+              if (Object.keys(sigMap).length > 0) {
+                lines.push(`\nSignals:`);
+                for (const tf of [15, 5, 1]) {
+                  if (sigMap[tf]) lines.push(`• ${tf}m: ${sigMap[tf].join('; ')}`);
+                }
+              }
+
+              // Claude reasoning if present
+              if (result.claudeReasoning?.reasoning) {
+                lines.push(`\nClaude: "${result.claudeReasoning.reasoning}"`);
+              }
+
+              lines.push(`\nScan: ${mode.toUpperCase()} | ${new Date().toTimeString().slice(0, 8)}`);
+
+              this._bot.sendMessage(chatId, lines.join('\n') + footer(), { parse_mode: 'Markdown' });
+            })
+            .catch((err) => {
+              this._bot.sendMessage(chatId, `Equity scan error for ${symbol}: ${err.message}${footer()}`);
+            });
+          return;
+        }
+
+        // ── Index deep scan (Phase 5) ─────────────────────────────────────────
+        this._bot.sendMessage(chatId, `Scanning ${symbol}...${footer()}`);
+        const symbolScanner = require('../intelligence/symbol-scanner');
+        symbolScanner.scan(symbol)
+          .then((result) => {
+            if (result.error) {
+              this._bot.sendMessage(chatId, `Scan failed for ${symbol}: ${result.error}${footer()}`);
+              return;
+            }
+            const stratLines = (result.strategyScores || [])
+              .map((s) => `  ${s.strategy}: score=${s.score} eligible=${s.eligible}`)
+              .join('\n') || '  none';
+            const text2 = [
+              `*Scan Result: ${symbol}*`,
+              `Composite Score: ${result.score}/100`,
+              `Underlying: ${result.chain?.underlyingValue ?? 'N/A'}  ATM: ${result.chain?.atmStrike ?? 'N/A'}`,
+              `PCR: ${result.chain?.pcr ?? 'N/A'}  VIX: ${result.chain?.vix ?? 'N/A'}`,
+              `RSI: ${result.indicators?.rsi?.toFixed(1) ?? 'N/A'}  BB Width: ${result.indicators?.bbWidth?.toFixed(2) ?? 'N/A'}%`,
+              `\nStrategy Scores:\n${stratLines}`,
+              result.score >= require('../config').DEEP_SCAN_CONFIDENCE_THRESHOLD
+                ? `\n⚡ FLAGGED — score above threshold` : '',
+            ].filter(Boolean).join('\n');
+            this._bot.sendMessage(chatId, text2 + footer(), { parse_mode: 'Markdown' });
+          })
+          .catch((err) => {
+            this._bot.sendMessage(chatId, `Scan error for ${symbol}: ${err.message}${footer()}`);
+          });
+        return;
+      }
+      if (text === '/watchlist') {
+        const watchlistManager = require('../intelligence/watchlist-manager');
+        const ranked = watchlistManager.getRanked();
+        if (ranked.length === 0) {
+          this._bot.sendMessage(chatId, `Watchlist is empty — no scan results yet.${footer()}`);
+          return;
+        }
+        const lines = ranked.map((e, i) => `${i + 1}. ${e.symbol}: ${e.score}/100`).join('\n');
+        this._bot.sendMessage(chatId, `*Watchlist (${ranked.length} symbols)*\n${lines}${footer()}`, { parse_mode: 'Markdown' });
         return;
       }
       if (text === '/status') {
@@ -180,6 +330,16 @@ class TelegramNotifier {
   _onClosed(payload) {
     if (!this._bot) return;
     const text = `*Trade Closed*\nRealised P&L: ₹${payload.realisedPnl}\nDuration: ${payload.duration}s\nReason: ${payload.reason}`;
+    this._bot.sendMessage(this._authorizedId, text + footer(), { parse_mode: 'Markdown' });
+  }
+
+  /**
+   * Sends a freeform alert message to the authorised chat.
+   * Safe to call before start() — silently skips if bot not yet initialised.
+   * @param {string} text - Plain or Markdown text
+   */
+  sendAlert(text) {
+    if (!this._bot) return;
     this._bot.sendMessage(this._authorizedId, text + footer(), { parse_mode: 'Markdown' });
   }
 }

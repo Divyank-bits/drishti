@@ -49,10 +49,27 @@ function evaluate(position, candle, sessionContext) {
       reason: `Absolute P&L stop: loss ₹${Math.abs(currentPnl)} exceeds ₹${absoluteStop}` };
   }
 
-  // ── Rule 4: Dangerous window — only Rule 6 can exit here ─────────────────
+  // ── Rule 4: Dangerous window ─────────────────────────────────────────────
   if (_isDangerousWindow(candle.openTime)) {
-    return { shouldExit: false, flagged: false, rule: null,
-      reason: 'Dangerous window — no exits except absolute P&L stop' };
+    const windowMode = (config.ANTI_HUNT_DANGEROUS_WINDOW_MODE || 'BLOCK_ALL').toUpperCase();
+
+    if (windowMode === 'SUPPRESS_FIRST') {
+      // First breach in window: set flag on position, don't exit.
+      // Caller (position-tracker) must persist _dangerousWindowBreach on the position object.
+      if (!position._dangerousWindowBreach) {
+        position._dangerousWindowBreach = true;
+        return { shouldExit: false, flagged: false, rule: null,
+          reason: 'Dangerous window — first breach suppressed (SUPPRESS_FIRST mode)' };
+      }
+      // Second consecutive breach: fall through to Rules 1+2 evaluation below.
+    } else {
+      // BLOCK_ALL (default): block all exits regardless of price
+      return { shouldExit: false, flagged: false, rule: null,
+        reason: 'Dangerous window — no exits except absolute P&L stop' };
+    }
+  } else {
+    // Outside dangerous window: clear the suppression flag so it resets each window
+    position._dangerousWindowBreach = false;
   }
 
   // ── Rules 1+2: Price must close (not touch) beyond 50pt buffer zone ───────
@@ -62,20 +79,23 @@ function evaluate(position, candle, sessionContext) {
 
   if (ceBreach || peBreach) {
     // ── Rule 3: Volume confirmation ──────────────────────────────────────
-    if (candle.volume === 0) {
-      return { shouldExit: false, flagged: false, rule: null,
-        reason: 'Volume unavailable — Rule 3 skipped, treating as hunt' };
-    }
+    const volumeRequired = config.ANTI_HUNT_VOLUME_REQUIRED !== false;
 
-    if (candle.volume < avgVolume * 1.5) {
-      return { shouldExit: false, flagged: false, rule: null,
-        reason: `Volume ${candle.volume} < 1.5× avg ${avgVolume} — likely hunt` };
+    if (volumeRequired) {
+      if (candle.volume === 0) {
+        return { shouldExit: false, flagged: false, rule: null,
+          reason: 'Volume unavailable — Rule 3 skipped, treating as hunt' };
+      }
+      if (candle.volume < avgVolume * 1.5) {
+        return { shouldExit: false, flagged: false, rule: null,
+          reason: `Volume ${candle.volume} < 1.5× avg ${avgVolume} — likely hunt` };
+      }
     }
 
     const side   = ceBreach ? 'CE' : 'PE';
     const strike = ceBreach ? strikes.shortCe : strikes.shortPe;
     return { shouldExit: true, flagged: false, rule: 2,
-      reason: `${side} short strike ${strike} breached by >50pts on high volume` };
+      reason: `${side} short strike ${strike} breached by >50pts${volumeRequired ? ' on high volume' : ''}` };
   }
 
   // ── Rule 5: Delta monitoring (flag only, not exit) ────────────────────────

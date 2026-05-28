@@ -68,6 +68,18 @@ module.exports = Object.freeze({
   CIRCUIT_BREAKER_HIT:   'CIRCUIT_BREAKER_HIT',
   CIRCUIT_BREAKER_RESET: 'CIRCUIT_BREAKER_RESET',
 
+  // ── Phase 5 — Deep Scan / Watchlist ─────────────────────────────────────
+  SCAN_STARTED:        'SCAN_STARTED',         // scan-scheduler begins a scan cycle
+  SCAN_RESULT:         'SCAN_RESULT',           // symbol-scanner finished scoring a symbol
+  SCAN_SYMBOL_FLAGGED: 'SCAN_SYMBOL_FLAGGED',  // symbol crossed DEEP_SCAN_CONFIDENCE_THRESHOLD
+  WATCHLIST_UPDATED:   'WATCHLIST_UPDATED',     // watchlist-manager re-ranked the symbol list
+
+  // ── Phase 6 — Equity Directional Scan ───────────────────────────────────
+  EQUITY_SCAN_STARTED:      'EQUITY_SCAN_STARTED',      // equity-scanner begins a scan
+  EQUITY_SCAN_RESULT:       'EQUITY_SCAN_RESULT',        // equity-scanner finished (all strategies scored)
+  EQUITY_PATTERN_FORMING:   'EQUITY_PATTERN_FORMING',    // confluence ≥ FORMING threshold
+  EQUITY_PATTERN_CONFIRMED: 'EQUITY_PATTERN_CONFIRMED',  // confluence ≥ CONFIRMED threshold
+
   // ── System ───────────────────────────────────────────────────────────────
   SYSTEM_READY:        'SYSTEM_READY',
   DAILY_SUMMARY:       'DAILY_SUMMARY',

@@ -341,6 +341,26 @@ section('Straddle — partial fill');
 
 ok('validatePartialFill returns false', str.validatePartialFill([]) === false);
 
+// ── Gate 7: signalTimeframe routing ──────────────────────────────────────────
+
+section('signalTimeframe — per-strategy candle timeframe');
+
+const IronCondorStrategy   = require('../strategies/iron-condor.strategy');
+const BullPutStrategy      = require('../strategies/bull-put-spread.strategy');
+const BearCallStrategy     = require('../strategies/bear-call-spread.strategy');
+const StraddleStrategyMod  = require('../strategies/straddle.strategy');
+
+// registry exports instances; get the class from the instance's constructor
+const icInstance  = IronCondorStrategy;
+const bpsInstance = BullPutStrategy;
+const bcsInstance = BearCallStrategy;
+const strInstance = StraddleStrategyMod;
+
+ok('Iron Condor signalTimeframe = 15', icInstance.signalTimeframe === 15);
+ok('Bull Put Spread signalTimeframe = 5', bpsInstance.signalTimeframe === 5);
+ok('Bear Call Spread signalTimeframe = 5', bcsInstance.signalTimeframe === 5);
+ok('Straddle signalTimeframe = 5', strInstance.signalTimeframe === 5);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\n${'─'.repeat(58)}`);

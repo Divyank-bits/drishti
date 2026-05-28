@@ -1,8 +1,8 @@
 /**
  * @file nse-source.js
- * @description Polls NSE for NIFTY LTP using stock-nse-india package.
+ * @description Polls NSE for NIFTY LTP (and any additional watchlist symbols) using stock-nse-india.
  * Emits TICK_RECEIVED {symbol, ltp, volume:0, timestamp} on each poll.
- * Handles session initialization and cookie refreshes automatically.
+ * Supports multi-symbol polling via subscribeSymbol(symbol) for Phase 5 deep scan.
  */
 
 'use strict';
@@ -10,9 +10,10 @@
 const { NseIndia } = require('stock-nse-india');
 const eventBus     = require('../../core/event-bus');
 const EVENTS       = require('../../core/events');
+const config       = require('../../config');
 
 const nse = new NseIndia();
-const POLL_MS = 3000; 
+const POLL_MS = 3000;
 
 // Market hours in UTC (IST - 5:30)
 const MARKET_OPEN_UTC_H  = 3;   // 09:15 IST
@@ -21,6 +22,14 @@ const MARKET_CLOSE_UTC_H = 10;  // 15:30 IST
 const MARKET_CLOSE_UTC_M = 0;
 
 const MAX_FAILURES = 10;
+
+// NSE index name mapping — used when polling index symbols via getEquityStockIndices
+const INDEX_NAME_MAP = {
+  NIFTY:     'NIFTY 50',
+  BANKNIFTY: 'NIFTY BANK',
+  FINNIFTY:  'NIFTY FIN SERVICE',
+  MIDCPNIFTY:'NIFTY MIDCAP SELECT',
+};
 
 function log(level, msg) {
   const ts = new Date().toTimeString().slice(0, 8);
@@ -33,6 +42,20 @@ class NseSource {
     this._failureCount     = 0;
     this._connectedEmitted = false;
     this._isWarmingUp      = false;
+    // Primary symbol + any additional symbols added via subscribeSymbol()
+    this._symbols          = new Set(['NIFTY']);
+  }
+
+  /**
+   * Adds a symbol to the polling set. Safe to call before or after start().
+   * @param {string} symbol — uppercase NSE symbol e.g. 'BANKNIFTY'
+   */
+  subscribeSymbol(symbol) {
+    const sym = symbol.toUpperCase();
+    if (!this._symbols.has(sym)) {
+      this._symbols.add(sym);
+      log('INFO', `Subscribed to additional symbol: ${sym}`);
+    }
   }
 
   /**
@@ -43,16 +66,20 @@ class NseSource {
     if (this._isWarmingUp) return;
     this._isWarmingUp = true;
 
+    // Subscribe watchlist symbols on boot
+    for (const sym of config.WATCHLIST_SYMBOLS || []) {
+      this.subscribeSymbol(sym);
+    }
+
     log('INFO', 'Initializing NSE session (warm-up)...');
-    
+
     try {
-      // Library handshake: visiting the index page to get cookies
-      await nse.getEquityStockIndices("NIFTY 50");
+      await nse.getEquityStockIndices('NIFTY 50');
       log('INFO', 'NSE Session initialized successfully.');
-      
+
       this._isWarmingUp = false;
       this._timer = setInterval(() => this._poll(), POLL_MS);
-      this._poll(); // run first poll immediately
+      this._poll();
     } catch (err) {
       log('ERROR', `Warm-up failed: ${err.message}. Retrying in 10s...`);
       this._isWarmingUp = false;
@@ -78,23 +105,41 @@ class NseSource {
   }
 
   async _poll() {
-    // Only poll during market hours to avoid unnecessary 403s
     if (!this._isDuringMarketHours()) return;
 
     try {
-      // Fetch data for NIFTY 50 index
-      const data = await nse.getEquityStockIndices("NIFTY 50");
-      
-      // Find the NIFTY 50 entry in the indices list
-      const nifty = data.data.find(idx => idx.index === "NIFTY 50");
-      let ltp = nifty?.last;
+      // Fetch all index data in one call — covers NIFTY, BANKNIFTY, FINNIFTY etc.
+      const data = await nse.getEquityStockIndices('NIFTY 50');
 
-    // 2. Fallback to metadata if live array is empty (common when market is closed/reopening)
-      if (!ltp && data.metadata) {
-        ltp = data.metadata.last;
+      let emittedCount = 0;
+
+      for (const sym of this._symbols) {
+        const indexName = INDEX_NAME_MAP[sym];
+        let ltp = null;
+
+        if (indexName && data.data) {
+          const entry = data.data.find(idx => idx.index === indexName);
+          ltp = entry?.last ?? null;
+        }
+
+        // Fallback: metadata carries NIFTY 50 last price
+        if (!ltp && sym === 'NIFTY' && data.metadata) {
+          ltp = data.metadata.last ?? null;
+        }
+
+        if (!ltp || ltp <= 0) continue;
+
+        eventBus.emit(EVENTS.TICK_RECEIVED, {
+          symbol:    sym,
+          ltp:       parseFloat(ltp),
+          volume:    0,
+          timestamp: Date.now(),
+        });
+
+        emittedCount++;
       }
 
-      if (!ltp || ltp <= 0) throw new Error('Invalid LTP in library response');
+      if (emittedCount === 0) throw new Error('No valid LTP found for any subscribed symbol');
 
       this._failureCount = 0;
 
@@ -103,13 +148,6 @@ class NseSource {
         this._connectedEmitted = true;
         log('INFO', 'First successful poll — WEBSOCKET_CONNECTED emitted');
       }
-
-      eventBus.emit(EVENTS.TICK_RECEIVED, {
-        symbol:    'NIFTY',
-        ltp:       parseFloat(ltp),
-        volume:    0, // Library index data doesn't provide real-time volume
-        timestamp: Date.now(),
-      });
 
     } catch (err) {
       this._failureCount++;
@@ -125,31 +163,6 @@ class NseSource {
       }
     }
   }
-
-  async _poll2() {
-  try {
-    // Test with a specific stock instead of the index during off-market hours
-    const data = await nse.getEquityDetails("RELIANCE");
-    const ltp = data.priceInfo.lastPrice;
-
-    if (!ltp || ltp <= 0) throw new Error('Invalid LTP in library response');
-
-    this._failureCount = 0;
-    log('INFO', `Test Success: RELIANCE LTP is ${ltp}`);
-
-    eventBus.emit(EVENTS.TICK_RECEIVED, {
-      symbol:    'RELIANCE',
-      ltp:       parseFloat(ltp),
-      volume:    0,
-      timestamp: Date.now(),
-    });
-
-  } catch (err) {
-    this._failureCount++;
-    log('WARN', `Poll failed (${this._failureCount}/${MAX_FAILURES}): ${err.message}`);
-    // ... rest of error handling
-  }
-}
 }
 
 module.exports = new NseSource();

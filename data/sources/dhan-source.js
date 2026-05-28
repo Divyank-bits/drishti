@@ -1,9 +1,10 @@
 /**
  * @file dhan-source.js
- * @description Dhan WebSocket live tick feed for NIFTY 50.
+ * @description Dhan WebSocket live tick feed for NIFTY 50 and watchlist symbols.
  *              Connects to Dhan's binary feed API (authType=2, version=2).
- *              Parses binary packets and emits TICK_RECEIVED events identical
- *              in shape to nse-source.js — nothing downstream knows the difference.
+ *              Parses binary packets and emits TICK_RECEIVED {symbol, ltp, volume, timestamp}
+ *              identical in shape to nse-source.js. Supports multi-symbol subscription
+ *              via subscribeSymbol(symbol, securityId, segment) for Phase 5 deep scan.
  *              Handles reconnection; trips WEBSOCKET_RECONNECT_FAILED after
  *              WEBSOCKET_RECONNECT_TIMEOUT seconds without a successful packet.
  */
@@ -31,6 +32,14 @@ function log(level, msg) {
   console.log(`[${ts}] [DhanSource] [${level}] ${msg}`);
 }
 
+// Known Dhan security IDs for NSE index symbols (IDX_I segment)
+const SYMBOL_SECURITY_MAP = {
+  NIFTY:     { securityId: '13',   segment: 'IDX_I' },
+  BANKNIFTY: { securityId: '25',   segment: 'IDX_I' },
+  FINNIFTY:  { securityId: '27',   segment: 'IDX_I' },
+  MIDCPNIFTY:{ securityId: '442',  segment: 'IDX_I' },
+};
+
 class DhanSource {
   constructor() {
     this._ws               = null;
@@ -40,12 +49,52 @@ class DhanSource {
     this._connectedEmitted = false;
     this._stopped          = false;
     this._lastLtp          = null;
+    // Map of securityId → symbol name for demultiplexing incoming packets
+    this._securityIdToSymbol = new Map([['13', 'NIFTY']]);
+    // Instrument list for the subscribe request (rebuilt on reconnect)
+    this._instruments = [{ ExchangeSegment: config.DHAN_EXCHANGE_SEGMENT, SecurityId: config.DHAN_SECURITY_ID }];
+  }
+
+  /**
+   * Adds an additional symbol to the WebSocket subscription.
+   * Safe to call before start() — instruments list is sent on each (re)connect.
+   * @param {string} symbol — uppercase e.g. 'BANKNIFTY'
+   * @param {string} [securityId] — Dhan security ID; looked up from built-in map if omitted
+   * @param {string} [segment]    — exchange segment; defaults to IDX_I
+   */
+  subscribeSymbol(symbol, securityId, segment) {
+    const sym = symbol.toUpperCase();
+    const known = SYMBOL_SECURITY_MAP[sym];
+    const sid   = securityId ?? known?.securityId;
+    const seg   = segment    ?? known?.segment ?? 'IDX_I';
+
+    if (!sid) {
+      log('WARN', `subscribeSymbol(${sym}): no securityId provided and symbol not in built-in map — skipped`);
+      return;
+    }
+
+    if (!this._securityIdToSymbol.has(sid)) {
+      this._securityIdToSymbol.set(sid, sym);
+      this._instruments.push({ ExchangeSegment: seg, SecurityId: sid });
+      log('INFO', `Subscribed to additional symbol: ${sym} (securityId=${sid})`);
+
+      // Re-send subscription if already connected
+      if (this._ws && this._ws.readyState === 1 /* OPEN */) {
+        this._sendSubscribe();
+      }
+    }
   }
 
   start() {
     if (!config.DHAN_CLIENT_ID || !config.DHAN_ACCESS_TOKEN) {
       throw new Error('[DhanSource] DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN must be set in .env');
     }
+
+    // Subscribe watchlist symbols on boot
+    for (const sym of config.WATCHLIST_SYMBOLS || []) {
+      this.subscribeSymbol(sym);
+    }
+
     this._stopped = false;
     this._connect();
   }
@@ -81,20 +130,17 @@ class DhanSource {
   }
 
   _onOpen() {
-    log('INFO', 'WebSocket open — subscribing to NIFTY 50');
+    log('INFO', `WebSocket open — subscribing to ${this._instruments.length} symbol(s)`);
     this._reconnectTries = 0;
+    this._sendSubscribe();
+  }
 
+  _sendSubscribe() {
     const subscribe = {
       RequestCode:     15,
-      InstrumentCount: 1,
-      InstrumentList: [
-        {
-          ExchangeSegment: config.DHAN_EXCHANGE_SEGMENT,
-          SecurityId:      config.DHAN_SECURITY_ID,
-        },
-      ],
+      InstrumentCount: this._instruments.length,
+      InstrumentList:  this._instruments,
     };
-
     this._ws.send(JSON.stringify(subscribe));
   }
 
@@ -106,8 +152,10 @@ class DhanSource {
     switch (responseCode) {
       case PACKET.TICKER: {
         if (data.length < 16) return;
-        const ltp = data.readFloatLE(8);
-        const ltt = data.readInt32LE(12); // unix seconds
+        // Bytes 4–7: security ID (uint32 LE)
+        const secId = data.readUInt32LE(4).toString();
+        const ltp   = data.readFloatLE(8);
+        const ltt   = data.readInt32LE(12); // unix seconds
 
         if (!ltp || ltp <= 0) return;
         this._lastLtp = ltp;
@@ -117,13 +165,15 @@ class DhanSource {
         if (!this._connectedEmitted) {
           eventBus.emit(EVENTS.WEBSOCKET_CONNECTED, { timestamp: Date.now() });
           this._connectedEmitted = true;
-          log('INFO', `First tick received — WEBSOCKET_CONNECTED emitted. NIFTY: ₹${ltp.toFixed(2)}`);
+          log('INFO', `First tick received — WEBSOCKET_CONNECTED emitted. LTP: ₹${ltp.toFixed(2)}`);
         }
 
+        const symbol = this._securityIdToSymbol.get(secId) ?? secId;
+
         eventBus.emit(EVENTS.TICK_RECEIVED, {
-          symbol:    'NIFTY',
+          symbol,
           ltp:       parseFloat(ltp.toFixed(2)),
-          volume:    0, // Index feed does not carry volume; candle-level volume from Dhan charts
+          volume:    0,
           timestamp: ltt ? ltt * 1000 : Date.now(),
         });
         break;

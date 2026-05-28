@@ -55,6 +55,9 @@ class SessionContext {
       wins: 0,
       losses: 0,
 
+      // Phase 5: scan results map — { symbol → { score, timestamp } }
+      scanResults: {},
+
       // Session flags
       isPaused: false,         // set by /pause Telegram command
       claudeAvailable: true,   // false when Claude circuit breaker trips
@@ -98,6 +101,15 @@ class SessionContext {
     eventBus.on(EVENTS.OPTIONS_CHAIN_UPDATED, ({ vix }) => {
       if (this._data.vixAtOpen === null) this._data.vixAtOpen = vix;
       this._data.vixCurrent = vix;
+    });
+
+    // Phase 5: track latest scan score per symbol within the trading day
+    eventBus.on(EVENTS.SCAN_RESULT, (payload) => {
+      if (!payload.symbol || payload.error) return;
+      this._data.scanResults[payload.symbol] = {
+        score:     payload.score,
+        timestamp: payload.timestamp,
+      };
     });
 
     // Phase 2: hook POSITION_CLOSED → update pnlToday, consecutiveLosses, wins/losses

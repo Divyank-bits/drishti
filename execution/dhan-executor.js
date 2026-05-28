@@ -2,9 +2,9 @@
  * @file dhan-executor.js
  * @description Live order executor using Dhan REST API v2.
  *              Implements the same interface as PaperExecutor.
- *              Active when EXECUTION_MODE=LIVE. Each IC leg is placed as a
- *              separate MARKET order on NSE_FNO. All 4 legs must fill — any
- *              failure triggers rollback of successfully placed legs.
+ *              Active when EXECUTION_MODE=LIVE. Uses Dhan basket order API
+ *              to place all legs atomically in a single request. Falls back
+ *              to sequential _placeOneLeg() if basket API is unavailable.
  */
 'use strict';
 
@@ -47,6 +47,12 @@ const POLL_TIMEOUT_MS  = 30_000;
 // Dhan order terminal states
 const TERMINAL_STATES = new Set(['TRADED', 'CANCELLED', 'REJECTED', 'EXPIRED', 'PART_TRADED']);
 
+// Basket order endpoint (Dhan v2) — places all legs atomically
+const BASKET_ORDER_PATH = '/orders/basket';
+
+// Non-terminal order states used in reconciliation
+const OPEN_STATES = new Set(['PENDING', 'TRANSIT', 'PARTIALLY_TRADED']);
+
 class DhanExecutor extends OrderExecutor {
   constructor() {
     super();
@@ -72,8 +78,8 @@ class DhanExecutor extends OrderExecutor {
   // ── Public interface ──────────────────────────────────────────────────────
 
   /**
-   * Places all 4 IC legs as live MARKET orders on Dhan.
-   * Rolls back any placed legs if a subsequent leg fails.
+   * Places all legs as live MARKET orders on Dhan using the basket order API.
+   * Falls back to sequential placement if basket API returns 404/not-supported.
    *
    * @param {Array<{strike, type, action}>} legs
    * @returns {Promise<object>} fill object (mirrors PaperExecutor shape)
@@ -83,36 +89,20 @@ class DhanExecutor extends OrderExecutor {
     const eventBus = getEventBus();
 
     eventBus.emit(EVENTS.ORDER_PLACING, { legs });
-    log('INFO', `Placing IC — ${legs.length} legs`);
+    log('INFO', `Placing order — ${legs.length} legs (basket mode)`);
 
-    const placedDhanIds = []; // track for rollback
-    const filledLegs    = [];
-
+    let filledLegs;
     try {
-      for (const leg of legs) {
-        const securityId = this._resolveSecurityId(leg);
-        const qty        = (config.DEFAULT_LOTS || 1) * config.NIFTY_LOT_SIZE;
-
-        const dhanOrderId = await this._placeOneLeg(leg, securityId, qty);
-        placedDhanIds.push({ dhanOrderId, leg, action: leg.action });
-
-        const fillDetails = await this._pollUntilFilled(dhanOrderId);
-        filledLegs.push({
-          ...leg,
-          securityId,
-          dhanOrderId,
-          fillPrice: fillDetails.price,
-          fillQty:   fillDetails.quantity,
-        });
-
-        log('INFO', `Leg filled: ${leg.action} ${leg.type} ${leg.strike} @ ₹${fillDetails.price}`);
-      }
+      filledLegs = await this._placeBasket(legs);
     } catch (err) {
-      log('ERROR', `Leg placement failed: ${err.message} — rolling back ${placedDhanIds.length} placed legs`);
-      await this._rollback(placedDhanIds);
-      getEventBus().emit(EVENTS.ORDER_FAILED, { reason: err.message });
-      getEventBus().emit(EVENTS.PARTIAL_FILL_ROLLBACK, { placedDhanIds });
-      throw err;
+      if (err._basketUnsupported) {
+        log('WARN', `Basket API unavailable — falling back to sequential placement`);
+        filledLegs = await this._placeSequential(legs);
+      } else {
+        log('ERROR', `Basket placement failed: ${err.message}`);
+        eventBus.emit(EVENTS.ORDER_FAILED, { reason: err.message });
+        throw err;
+      }
     }
 
     const netPremiumPerLot = filledLegs.reduce((sum, leg) => {
@@ -128,13 +118,14 @@ class DhanExecutor extends OrderExecutor {
     };
 
     this._activeOrders[fill.orderId] = fill;
-    log('INFO', `IC placed — premium collected ₹${premiumCollected}`);
+    log('INFO', `Order placed — premium collected ₹${premiumCollected}`);
     eventBus.emit(EVENTS.ORDER_FILLED, fill);
     return fill;
   }
 
   /**
-   * Exits all 4 legs of an active IC by placing reverse MARKET orders.
+   * Exits all legs of an active position by placing reverse MARKET orders as a basket.
+   * Falls back to sequential exit if basket API is unavailable.
    *
    * @param {string} orderId internal fill ID returned by placeOrder
    * @returns {Promise<object>} exit result with realisedPnl
@@ -143,27 +134,35 @@ class DhanExecutor extends OrderExecutor {
     const entryFill = this._activeOrders[orderId];
     if (!entryFill) throw new Error(`[DhanExecutor] Unknown orderId: ${orderId}`);
 
-    log('INFO', `Exiting IC orderId=${orderId}`);
-    const exitLegs = [];
+    log('INFO', `Exiting position orderId=${orderId} — ${entryFill.legs.length} legs (basket mode)`);
 
-    for (const leg of entryFill.legs) {
-      const exitAction  = leg.action === 'SELL' ? 'BUY' : 'SELL';
-      const qty         = leg.fillQty || (config.DEFAULT_LOTS || 1) * config.NIFTY_LOT_SIZE;
+    // Build exit legs (reverse action, reuse securityId from entry fill)
+    const exitLegDefs = entryFill.legs.map(leg => ({
+      ...leg,
+      action:     leg.action === 'SELL' ? 'BUY' : 'SELL',
+      _entryLeg:  leg,   // stash original for result assembly
+    }));
 
-      const dhanOrderId = await this._placeOneLeg(
-        { ...leg, action: exitAction },
-        leg.securityId,
-        qty,
-      );
-      const fillDetails = await this._pollUntilFilled(dhanOrderId);
-      exitLegs.push({
-        ...leg,
-        exitAction,
-        exitFillPrice: fillDetails.price,
-        exitDhanOrderId: dhanOrderId,
-      });
-      log('INFO', `Exit leg filled: ${exitAction} ${leg.type} ${leg.strike} @ ₹${fillDetails.price}`);
+    let filledExitLegs;
+    try {
+      filledExitLegs = await this._placeBasket(exitLegDefs);
+    } catch (err) {
+      if (err._basketUnsupported) {
+        log('WARN', `Basket exit unavailable — falling back to sequential exit`);
+        filledExitLegs = await this._placeSequential(exitLegDefs);
+      } else {
+        log('ERROR', `Basket exit failed: ${err.message}`);
+        throw err;
+      }
     }
+
+    // Reassemble exit result with original leg metadata
+    const exitLegs = filledExitLegs.map((filled, i) => ({
+      ...entryFill.legs[i],
+      exitAction:      filled.action,
+      exitFillPrice:   filled.fillPrice,
+      exitDhanOrderId: filled.dhanOrderId,
+    }));
 
     const exitPremiumPerLot = exitLegs.reduce((sum, leg) => {
       return sum + (leg.action === 'SELL' ? -leg.exitFillPrice : leg.exitFillPrice);
@@ -179,7 +178,7 @@ class DhanExecutor extends OrderExecutor {
     };
 
     delete this._activeOrders[orderId];
-    log('INFO', `IC exited — realised P&L ₹${realisedPnl}`);
+    log('INFO', `Position exited — realised P&L ₹${realisedPnl}`);
     getEventBus().emit(getEvents().ORDER_EXITED, exitResult);
     return exitResult;
   }
@@ -203,6 +202,171 @@ class DhanExecutor extends OrderExecutor {
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
+
+  /**
+   * Places all legs as a single atomic basket order via POST /orders/basket.
+   * Each order in the basket is a MARKET order. Polls all order IDs in parallel
+   * after placement. Throws with _basketUnsupported=true if Dhan returns 404/422.
+   * @private
+   */
+  async _placeBasket(legs) {
+    const qty = (config.DEFAULT_LOTS || 1) * config.NIFTY_LOT_SIZE;
+
+    const orders = legs.map(leg => ({
+      dhanClientId:      config.DHAN_CLIENT_ID,
+      transactionType:   leg.action,
+      exchangeSegment:   EXCHANGE_SEGMENT,
+      productType:       PRODUCT_TYPE,
+      orderType:         ORDER_TYPE,
+      validity:          ORDER_VALIDITY,
+      securityId:        leg.securityId || this._resolveSecurityId(leg),
+      quantity:          leg.fillQty || qty,
+      disclosedQuantity: 0,
+      price:             0,
+      triggerPrice:      0,
+      afterMarketOrder:  false,
+    }));
+
+    let res;
+    try {
+      res = await this._http.post(BASKET_ORDER_PATH, { orders });
+    } catch (err) {
+      const status = err.response?.status;
+      if (status === 404 || status === 422) {
+        const unsupported = new Error(`Basket API not supported (HTTP ${status})`);
+        unsupported._basketUnsupported = true;
+        throw unsupported;
+      }
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      throw new Error(`_placeBasket POST failed: ${detail}`);
+    }
+
+    // Dhan basket response: array of { orderId, orderStatus, ... } in same order as input
+    const basketResults = res.data?.orders ?? res.data;
+    if (!Array.isArray(basketResults) || basketResults.length !== legs.length) {
+      throw new Error(`_placeBasket unexpected response shape: ${JSON.stringify(res.data)}`);
+    }
+
+    // Check for any immediate rejections before polling
+    for (let i = 0; i < basketResults.length; i++) {
+      const r = basketResults[i];
+      if (r.orderStatus === 'REJECTED' || r.orderStatus === 'CANCELLED') {
+        throw new Error(`Basket leg ${i} (${legs[i].action} ${legs[i].type} ${legs[i].strike}) rejected: ${r.remarks || r.orderStatus}`);
+      }
+    }
+
+    log('INFO', `Basket placed — ${basketResults.length} legs, polling for fills`);
+
+    // Poll all legs in parallel
+    const fills = await Promise.all(
+      basketResults.map(async (r, i) => {
+        const dhanOrderId = String(r.orderId);
+        const fillDetails = await this._pollUntilFilled(dhanOrderId);
+        const leg = legs[i];
+        const securityId = leg.securityId || this._resolveSecurityId(leg);
+        log('INFO', `Basket leg filled: ${leg.action} ${leg.type} ${leg.strike} @ ₹${fillDetails.price}`);
+        return {
+          ...leg,
+          securityId,
+          dhanOrderId,
+          fillPrice: fillDetails.price,
+          fillQty:   fillDetails.quantity,
+        };
+      })
+    );
+
+    return fills;
+  }
+
+  /**
+   * Places legs sequentially — fallback when basket API is unavailable.
+   * Rolls back on failure. Use _placeBasket() instead wherever possible.
+   * @private
+   */
+  async _placeSequential(legs) {
+    const qty = (config.DEFAULT_LOTS || 1) * config.NIFTY_LOT_SIZE;
+    const placedDhanIds = [];
+    const filledLegs    = [];
+
+    try {
+      for (const leg of legs) {
+        const securityId  = leg.securityId || this._resolveSecurityId(leg);
+        const legQty      = leg.fillQty || qty;
+
+        const dhanOrderId = await this._placeOneLeg(leg, securityId, legQty);
+        placedDhanIds.push({ dhanOrderId, leg });
+
+        const fillDetails = await this._pollUntilFilled(dhanOrderId);
+        filledLegs.push({
+          ...leg,
+          securityId,
+          dhanOrderId,
+          fillPrice: fillDetails.price,
+          fillQty:   fillDetails.quantity,
+        });
+
+        log('INFO', `Sequential leg filled: ${leg.action} ${leg.type} ${leg.strike} @ ₹${fillDetails.price}`);
+      }
+    } catch (err) {
+      log('ERROR', `Sequential leg failed: ${err.message} — rolling back ${placedDhanIds.length} placed legs`);
+      await this._rollback(placedDhanIds);
+      const EVENTS = getEvents();
+      getEventBus().emit(EVENTS.ORDER_FAILED, { reason: err.message });
+      getEventBus().emit(EVENTS.PARTIAL_FILL_ROLLBACK, { placedDhanIds });
+      throw err;
+    }
+
+    return filledLegs;
+  }
+
+  /**
+   * Fetches all open NSE_FNO orders from Dhan for today.
+   * Used by boot reconciliation (Block 3).
+   * @returns {Promise<Array>} orders in non-terminal states
+   */
+  async fetchOpenOrders() {
+    try {
+      const res = await this._http.get('/orders');
+      const all = res.data ?? [];
+      return all.filter(o =>
+        o.exchangeSegment === EXCHANGE_SEGMENT &&
+        !TERMINAL_STATES.has(o.orderStatus) ||
+        o.orderStatus === 'TRADED'   // include filled-today for reconciliation completeness
+      );
+    } catch (err) {
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      throw new Error(`fetchOpenOrders failed: ${detail}`);
+    }
+  }
+
+  /**
+   * Compares open Dhan orders against the last known journal position state.
+   * Returns a reconciliation report — does NOT take action itself.
+   *
+   * @param {{ openOrderIds: string[] }} journalState
+   * @returns {Promise<{ clean: boolean, orphanedOrders: Array, missingOrders: string[] }>}
+   */
+  async reconcile(journalState) {
+    const dhanOrders   = await this.fetchOpenOrders();
+    const journalIds   = new Set(journalState.openOrderIds || []);
+    const dhanIds      = new Set(dhanOrders.map(o => String(o.orderId)));
+
+    // Dhan has orders not in journal → orphaned (crash mid-fill)
+    const orphanedOrders = dhanOrders.filter(o => !journalIds.has(String(o.orderId)));
+
+    // Journal references orders Dhan doesn't know about → stale journal entries
+    const missingOrders = [...journalIds].filter(id => !dhanIds.has(id));
+
+    const clean = orphanedOrders.length === 0 && missingOrders.length === 0;
+
+    if (!clean) {
+      log('WARN', `Reconciliation mismatch — orphaned: ${orphanedOrders.length}, missing: ${missingOrders.length}`);
+    } else {
+      log('INFO', 'Reconciliation clean — no orphaned or missing orders');
+    }
+
+    return { clean, orphanedOrders, missingOrders };
+  }
 
   /**
    * Resolves the Dhan security_id for a leg from the last option chain snapshot.

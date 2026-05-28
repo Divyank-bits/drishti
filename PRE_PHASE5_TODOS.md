@@ -96,6 +96,25 @@ collecting it now so data accumulates over time.
 
 ---
 
+## Block 6 — Per-Strategy Signal Timeframe
+
+**Problem:** All 4 strategies hardcode `CANDLE_CLOSE_15M` for signal checks. Directional
+strategies (Bull Put Spread, Bear Call Spread, Straddle) benefit from faster 5m confirmation —
+waiting 15m means late entry or missed move. Iron Condor correctly stays on 15m (needs
+confirmed neutrality).
+
+**Fix:** Each strategy declares its own `signalTimeframe` — strategy files listen to the
+correct candle event. Anti-hunt in `position-tracker.js` stays on 15m regardless.
+
+| # | Task | File |
+|---|------|------|
+| 22 | Add `get signalTimeframe()` to `base.strategy.js` — returns `15` by default | `strategies/base.strategy.js` |
+| 23 | Override `signalTimeframe` to `5` in Bull Put Spread, Bear Call Spread, and Straddle | `strategies/*.strategy.js` |
+| 24 | Update each strategy's `init()` — subscribe to `CANDLE_CLOSE_5M` or `CANDLE_CLOSE_15M` based on `this.signalTimeframe` instead of hardcoding 15M | `strategies/*.strategy.js` |
+| 25 | Verify `position-tracker.js` anti-hunt still listens to `CANDLE_CLOSE_15M` only — do not change | `monitoring/position-tracker.js` |
+
+---
+
 ## Verification Gates (all must pass before Phase 5 starts)
 
 | Gate | What it tests |
@@ -106,3 +125,4 @@ collecting it now so data accumulates over time.
 | Gate 4 | `ANTI_HUNT_VOLUME_REQUIRED=false` exits correctly on price breach when volume=0 |
 | Gate 5 | `DANGEROUS_WINDOW_MODE=SUPPRESS_FIRST` holds on first breach, exits on second consecutive breach |
 | Gate 6 | Options chain snapshot file created and appended correctly on each chain update |
+| Gate 7 | Bull Put Spread fires on 5m candle close; Iron Condor fires on 15m candle close — both verified via test |

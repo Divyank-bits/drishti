@@ -170,4 +170,111 @@ Respond with ONLY valid JSON in this exact shape:
 }`;
 }
 
-module.exports = { buildEntryPrompt, buildHuntPrompt };
+/**
+ * Builds a deep-scan analysis prompt asking Claude whether a watchlist symbol warrants flagging.
+ * Used in HYBRID/AI mode when the scan score exceeds the threshold.
+ *
+ * @param {object} scanResult — symbol-scanner result payload
+ * @returns {string}
+ */
+function buildScanPrompt(scanResult) {
+  const { symbol, score, chain, indicators, strategyScores } = scanResult;
+
+  const stratLines = (strategyScores || [])
+    .map((s) => `  ${s.strategy}: score=${s.score} eligible=${s.eligible}${s.failed?.length ? ` failed=[${s.failed.join(',')}]` : ''}`)
+    .join('\n') || '  (none)';
+
+  return `You are evaluating whether NSE FO symbol ${symbol} warrants a trading opportunity flag.
+
+## Scan Score
+Composite score: ${score}/100  (threshold: ${require('../config').DEEP_SCAN_CONFIDENCE_THRESHOLD})
+
+## Options Chain
+Underlying: ${chain?.underlyingValue ?? 'N/A'}  ATM Strike: ${chain?.atmStrike ?? 'N/A'}
+VIX: ${chain?.vix ?? 'N/A'}  PCR: ${chain?.pcr ?? 'N/A'}
+
+## Technical Indicators (15m)
+RSI: ${indicators?.rsi?.toFixed(1) ?? 'N/A'}
+EMA9: ${indicators?.ema9?.toFixed(2) ?? 'N/A'}  EMA21: ${indicators?.ema21?.toFixed(2) ?? 'N/A'}
+BB Width: ${indicators?.bbWidth?.toFixed(2) ?? 'N/A'}%
+
+## Strategy Scores
+${stratLines}
+
+## Task
+Based on the above, assess whether ${symbol} is worth flagging for options strategy entry RIGHT NOW.
+Consider: IV environment, directional neutrality, OI-based support/resistance, liquidity.
+
+Respond with ONLY valid JSON in this exact shape:
+{
+  "approved": true | false,
+  "confidence": 0.0–1.0,
+  "reasoning": "one concise sentence"
+}`;
+}
+
+/**
+ * Builds an equity directional scan prompt for Claude.
+ * Used in '--claude' mode (free-form analysis) and '--confirm' mode (reasoning on top of rules).
+ *
+ * @param {string} symbol
+ * @param {object} candlesByTf    - { 1: [], 5: [], 15: [] }
+ * @param {object} indicators15   - indicators computed from 15m candles
+ * @param {object} context        - { prevDayHigh, prevDayLow, prevDayClose, vwap, dayOpen }
+ * @param {Array}  strategyResults - rules findings (empty in pure --claude mode)
+ * @param {object|null} confluence - confluence scorer result (null in pure --claude mode)
+ * @returns {string}
+ */
+function buildEquityScanPrompt(symbol, candlesByTf, indicators15, context, strategyResults, confluence) {
+  const rulesBlock = strategyResults && strategyResults.length > 0
+    ? strategyResults.map(s =>
+        `  [${s.timeframe}m] ${s.strategy}: ${s.state} (${s.confidence}%) — ${s.signals.join('; ') || 'no signals'}`
+      ).join('\n')
+    : '  (rules-only mode skipped — free-form analysis requested)';
+
+  const confluenceBlock = confluence
+    ? `Confluence score: ${confluence.score}/100  State: ${confluence.state}\n` +
+      `Dominant pattern: ${confluence.dominantPattern ?? 'none'}  Direction: ${confluence.dominantDirection ?? 'N/A'}\n` +
+      `Timeframe scores — 1m: ${confluence.timeframeScores[1] ?? 0}  5m: ${confluence.timeframeScores[5] ?? 0}  15m: ${confluence.timeframeScores[15] ?? 0}`
+    : '  (confluence not computed — direct Claude mode)';
+
+  return `You are performing a directional equity scan for NSE listed stock ${symbol}.
+
+## Market Context
+Prev Day High: ${context?.prevDayHigh ?? 'N/A'}  Prev Day Low: ${context?.prevDayLow ?? 'N/A'}
+Prev Day Close: ${context?.prevDayClose ?? 'N/A'}  Day Open: ${context?.dayOpen ?? 'N/A'}
+VWAP: ${context?.vwap != null ? context.vwap.toFixed(2) : 'N/A'}
+
+## Technical Indicators (15m)
+RSI: ${indicators15?.rsi?.toFixed(1) ?? 'N/A'}
+EMA9: ${indicators15?.ema9?.toFixed(2) ?? 'N/A'}  EMA21: ${indicators15?.ema21?.toFixed(2) ?? 'N/A'}
+BB Upper: ${indicators15?.bb?.upper?.toFixed(2) ?? 'N/A'}  Lower: ${indicators15?.bb?.lower?.toFixed(2) ?? 'N/A'}
+MACD: ${indicators15?.macd?.MACD?.toFixed(2) ?? 'N/A'}  Signal: ${indicators15?.macd?.signal?.toFixed(2) ?? 'N/A'}
+
+## Recent 15m Candles
+${_formatCandles(candlesByTf[15] || [], 8)}
+
+## Recent 5m Candles
+${_formatCandles(candlesByTf[5] || [], 6)}
+
+## Rules Engine Findings
+${rulesBlock}
+
+## Confluence Summary
+${confluenceBlock}
+
+## Task
+Analyse the directional setup for ${symbol}. Identify the most likely pattern (Bull Flag, Bear Flag,
+Breakout, Breakdown, Range Bound, or none). Assess whether the setup warrants acting on.
+
+Respond with ONLY valid JSON in this exact shape:
+{
+  "patternDetected": "Bull Flag" | "Bear Flag" | "Breakout" | "Breakdown" | "Range Bound" | "None",
+  "direction": "BULLISH" | "BEARISH" | "NEUTRAL" | "NONE",
+  "confidence": 0.0–1.0,
+  "reasoning": "one concise sentence",
+  "keyLevels": ["level1", "level2"]
+}`;
+}
+
+module.exports = { buildEntryPrompt, buildHuntPrompt, buildScanPrompt, buildEquityScanPrompt };

@@ -170,6 +170,25 @@ class OptionsChain {
     };
   }
 
+  /**
+   * Fetches options chain data for any NSE FO symbol on demand (Phase 5 scanner use).
+   * Uses NSE India library — does not emit events, returns the parsed result directly.
+   * @param {string} symbol — e.g. 'BANKNIFTY', 'FINNIFTY'
+   * @returns {Promise<object>} same shape as OPTIONS_CHAIN_UPDATED payload
+   */
+  async fetchForSymbol(symbol) {
+    const sym = symbol.toUpperCase();
+    try {
+      const raw = await nse.getIndexOptionChain(sym === 'NIFTY' ? 'NIFTY' : sym);
+      const result = this._parseOptionChain(raw);
+      result.symbol = sym;
+      return result;
+    } catch (err) {
+      log('ERROR', `fetchForSymbol(${sym}) failed: ${err.message}`);
+      throw err;
+    }
+  }
+
   _parseOptionChain(raw) {
     const records = raw.records;
     const filtered = raw.filtered;

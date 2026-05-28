@@ -228,6 +228,124 @@ const config = require('../config');
     }
   }
 
+  // ── Gate 8: DhanExecutor basket order mock ────────────────────────────────
+
+  section('Gate 8 — DhanExecutor basket order (mocked)');
+
+  {
+    const DhanExecutor = require('../execution/dhan-executor').constructor;
+
+    // Minimal mock of axios instance
+    function makeMockHttp({ basketStatus = 200, orderStatuses = ['TRADED', 'TRADED', 'TRADED', 'TRADED'] } = {}) {
+      let pollCall = 0;
+      return {
+        post: async (p, body) => {
+          if (p === '/orders/basket') {
+            if (basketStatus === 404) {
+              const err = new Error('Not Found'); err.response = { status: 404 }; throw err;
+            }
+            const orders = (body.orders || []).map((_, i) => ({
+              orderId: `MOCK_${i + 1}`,
+              orderStatus: 'PENDING',
+            }));
+            return { data: { orders } };
+          }
+          // sequential fallback: POST /orders
+          return { data: { orderId: `SEQ_${Date.now()}` } };
+        },
+        get: async (path) => {
+          // poll: GET /orders/:id
+          const status = orderStatuses[pollCall % orderStatuses.length];
+          pollCall++;
+          return { data: { orderStatus: status, tradedPrice: 120, filledQty: 25, quantity: 25 } };
+        },
+        delete: async () => ({ data: {} }),
+      };
+    }
+
+    // Build a fresh executor with injected mock http
+    function makeExecutor(httpOverride) {
+      const exec = Object.create(DhanExecutor.prototype);
+      exec._lastStrikeData = {
+        25500: { ceSecurityId: 'CE_SEC_1', peSecurityId: 'PE_SEC_X' },
+        25000: { ceSecurityId: 'CE_SEC_X', peSecurityId: 'PE_SEC_1' },
+        25700: { ceSecurityId: 'CE_SEC_2', peSecurityId: 'PE_SEC_X' },
+        24800: { ceSecurityId: 'CE_SEC_X', peSecurityId: 'PE_SEC_2' },
+      };
+      exec._activeOrders = {};
+      exec._http = httpOverride;
+      return exec;
+    }
+
+    const icLegs = [
+      { strike: 25500, type: 'CE', action: 'SELL' },
+      { strike: 25700, type: 'CE', action: 'BUY'  },
+      { strike: 25000, type: 'PE', action: 'SELL' },
+      { strike: 24800, type: 'PE', action: 'BUY'  },
+    ];
+
+    // Test 1: basket path succeeds
+    try {
+      const exec = makeExecutor(makeMockHttp());
+      const fills = await exec._placeBasket(icLegs);
+      ok('G8.1 _placeBasket returns one fill per leg', fills.length === icLegs.length);
+      ok('G8.2 each fill has dhanOrderId and fillPrice',
+        fills.every(f => f.dhanOrderId && typeof f.fillPrice === 'number'));
+    } catch (err) {
+      ok('G8.1 _placeBasket returns one fill per leg', false, err.message);
+      ok('G8.2 each fill has dhanOrderId and fillPrice', false, 'skipped');
+    }
+
+    // Test 2: basket 404 → _basketUnsupported flag set
+    try {
+      const exec = makeExecutor(makeMockHttp({ basketStatus: 404 }));
+      await exec._placeBasket(icLegs);
+      ok('G8.3 basket 404 throws _basketUnsupported', false, 'expected throw');
+    } catch (err) {
+      ok('G8.3 basket 404 throws with _basketUnsupported=true', err._basketUnsupported === true);
+    }
+
+    // Test 3: sequential fallback executes all legs
+    try {
+      const exec = makeExecutor(makeMockHttp({ basketStatus: 404 }));
+      const fills = await exec._placeSequential(icLegs);
+      ok('G8.4 _placeSequential returns one fill per leg', fills.length === icLegs.length);
+    } catch (err) {
+      ok('G8.4 _placeSequential returns one fill per leg', false, err.message);
+    }
+
+    // Test 4: reconcile detects orphaned orders
+    try {
+      const exec = makeExecutor({
+        get: async () => ({
+          data: [
+            { orderId: 'ORD_1', exchangeSegment: 'NSE_FNO', orderStatus: 'TRADED' },
+            { orderId: 'ORD_2', exchangeSegment: 'NSE_FNO', orderStatus: 'TRADED' },
+          ],
+        }),
+      });
+      const result = await exec.reconcile({ openOrderIds: ['ORD_1'] }); // ORD_2 is orphaned
+      ok('G8.5 reconcile detects orphaned order', result.orphanedOrders.length === 1);
+      ok('G8.6 reconcile.clean is false when orphans exist', result.clean === false);
+    } catch (err) {
+      ok('G8.5 reconcile detects orphaned order', false, err.message);
+      ok('G8.6 reconcile.clean is false when orphans exist', false, 'skipped');
+    }
+
+    // Test 5: reconcile clean when everything matches
+    try {
+      const exec = makeExecutor({
+        get: async () => ({
+          data: [{ orderId: 'ORD_1', exchangeSegment: 'NSE_FNO', orderStatus: 'TRADED' }],
+        }),
+      });
+      const result = await exec.reconcile({ openOrderIds: ['ORD_1'] });
+      ok('G8.7 reconcile.clean true when orders match', result.clean === true);
+    } catch (err) {
+      ok('G8.7 reconcile.clean true when orders match', false, err.message);
+    }
+  }
+
   // ── Summary ───────────────────────────────────────────────────────────────
 
   const total = passed + failed;

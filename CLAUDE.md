@@ -24,10 +24,10 @@ Each phase is only started after the user explicitly confirms the previous phase
 | **2** | Iron Condor paper trading — full strategy, Claude integration, anti-hunt, dashboard | ✅ COMPLETE |
 | **3** | Live Dhan execution — WebSocket feed, DhanExecutor, real order placement | ✅ COMPLETE |
 | **4** | Multi-strategy expansion — Bull Put Spread, Bear Call Spread, Straddle, strategy allocator | ✅ COMPLETE |
-| **Pre-5** | Critical fixes — basket orders, per-position StateMachine, boot reconciliation, anti-hunt knobs, snapshot collection | 🔜 NEXT |
-| **5** | Deep scan / watchlist — multi-symbol scanner, ranked watchlist, `/scan` Telegram command | ⏳ PENDING |
-| **6** | Equity directional scan — pattern detection (5 named patterns), VWAP, confluence scoring, `/scan RELIANCE` | ⏳ PENDING |
-| **7** | Backtesting + analytics — SQLite, NSE Bhavcopy, candle replay, performance report (optional, skippable) | ⏳ PENDING |
+| **Pre-5** | Critical fixes — basket orders, per-position StateMachine, boot reconciliation, anti-hunt knobs, snapshot collection | ✅ COMPLETE |
+| **5** | Deep scan / watchlist — multi-symbol scanner, ranked watchlist, `/scan` Telegram command | ✅ COMPLETE |
+| **6** | Equity directional scan — pattern detection (5 named patterns), VWAP, confluence scoring, `/scan RELIANCE` | ✅ COMPLETE |
+| **7** | Backtesting + analytics — SQLite, NSE Bhavcopy, candle replay, performance report (optional, skippable) | 🔜 NEXT |
 
 **Do not implement code from a future phase while building the current one.**
 
