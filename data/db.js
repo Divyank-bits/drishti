@@ -96,6 +96,24 @@ db.exec(`
     low_sample      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (setup_id, direction, sample, exit_mode)
   );
+
+  CREATE TABLE IF NOT EXISTS swing_trades (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol        TEXT NOT NULL,
+    setup_id      TEXT NOT NULL,
+    direction     TEXT NOT NULL,
+    entry_price   REAL,
+    stop_loss     REAL,
+    target        REAL,
+    shares        INTEGER,
+    trade_date    TEXT,
+    exit_price    REAL,
+    exit_reason   TEXT,
+    exit_date     TEXT,
+    notes         TEXT,
+    state         TEXT NOT NULL DEFAULT 'OPEN',
+    created_at    TEXT DEFAULT (datetime('now'))
+  );
 `);
 
 log('INFO', `Database ready at ${DB_PATH}`);
@@ -244,4 +262,52 @@ function writeSetupStats(row) {
   }
 }
 
-module.exports = { db, writeTrade, writeSnapshot, writeScanResult, writeDaily, readDailyCandles, writeSetupStats };
+const insertSwingTrade = db.prepare(`
+  INSERT INTO swing_trades
+    (symbol, setup_id, direction, entry_price, stop_loss, target, shares, trade_date, state)
+  VALUES
+    (@symbol, @setup_id, @direction, @entry_price, @stop_loss, @target, @shares, @trade_date, @state)
+`);
+
+const updateSwingTradeExit = db.prepare(`
+  UPDATE swing_trades
+  SET exit_price = @exit_price, exit_reason = @exit_reason, exit_date = @exit_date,
+      notes = @notes, state = 'CLOSED'
+  WHERE symbol = @symbol AND state = 'OPEN'
+`);
+
+const selectOpenSwingTrades = db.prepare(`
+  SELECT * FROM swing_trades WHERE state = 'OPEN' ORDER BY created_at ASC
+`);
+
+function writeSwingTrade(row) {
+  try {
+    insertSwingTrade.run(row);
+  } catch (err) {
+    log('ERROR', `writeSwingTrade failed: ${err.message}`);
+  }
+}
+
+function closeSwingTrade({ symbol, exitPrice, exitReason, exitDate, notes }) {
+  try {
+    updateSwingTradeExit.run({
+      symbol,
+      exit_price:  exitPrice,
+      exit_reason: exitReason || 'MANUAL',
+      exit_date:   exitDate || new Date().toISOString().slice(0, 10),
+      notes:       notes || null,
+    });
+  } catch (err) {
+    log('ERROR', `closeSwingTrade failed: ${err.message}`);
+  }
+}
+
+function readOpenSwingTrades() {
+  return selectOpenSwingTrades.all();
+}
+
+module.exports = {
+  db,
+  writeTrade, writeSnapshot, writeScanResult, writeDaily, readDailyCandles, writeSetupStats,
+  writeSwingTrade, closeSwingTrade, readOpenSwingTrades,
+};

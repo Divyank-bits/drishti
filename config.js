@@ -142,6 +142,12 @@ const config = {
   SWING_BT_OOS_FRACTION: 0.30,      // most recent 30% of dates held out
   SWING_BT_MIN_TRADES: 30,          // below this → LOW_SAMPLE
 
+  // ── Phase 8 — Evening scanner & risk ─────────────────────────────────────
+  SWING_SCAN_ENABLED: process.env.SWING_SCAN_ENABLED !== 'false',
+  SWING_SCAN_TIME: process.env.SWING_SCAN_TIME || '15:45',  // HH:MM IST
+  SWING_ACCOUNT_SIZE: parseInt(process.env.SWING_ACCOUNT_SIZE || '500000', 10),
+  SWING_RISK_PCT_PER_TRADE: parseFloat(process.env.SWING_RISK_PCT_PER_TRADE || '1.0'),
+
   // ── Anti-Hunt Config Knobs (Pre-Phase 5) ──────────────────────────────────
   // When false, Rule 3 volume gate is skipped — required when DATA_SOURCE=NSE (volume is always 0)
   ANTI_HUNT_VOLUME_REQUIRED: process.env.ANTI_HUNT_VOLUME_REQUIRED !== 'false',

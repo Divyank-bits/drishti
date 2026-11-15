@@ -51,6 +51,7 @@ class TelegramNotifier {
       { command: 'pause',      description: 'Pause new trade entries' },
       { command: 'resume',     description: 'Resume trade entries' },
       { command: 'squareoff',  description: 'Manually square off all positions' },
+      { command: 'smm',        description: 'Swing signals — /smm [SYMBOL] [enter/exit ...]' },
       { command: 'help',       description: 'Show all available commands' },
     ]).catch(err => log('WARN', `setMyCommands failed: ${err.message}`));
   }
@@ -73,6 +74,11 @@ class TelegramNotifier {
           `/scan SYMBOL — equity directional scan\n` +
           `/scan SYMBOL --claude — scan with Claude analysis\n` +
           `/scan SYMBOL --confirm — rules + Claude confirmation\n` +
+          `/smm — swing signal scan (all universe)\n` +
+          `/smm SYMBOL — swing scan for one symbol\n` +
+          `/smm enter SYMBOL SETUP_ID [LONG|SHORT] — log entry\n` +
+          `/smm exit SYMBOL PRICE — log exit\n` +
+          `/smm positions — list open swing trades\n` +
           `/pause — block new trade entries\n` +
           `/resume — unblock entries\n` +
           `/squareoff — manually exit all positions\n` +
@@ -227,6 +233,10 @@ class TelegramNotifier {
         this._bot.sendMessage(chatId, `*Watchlist (${ranked.length} symbols)*\n${lines}${footer()}`, { parse_mode: 'Markdown' });
         return;
       }
+      if (text.startsWith('/smm')) {
+        this._handleSmm(chatId, text);
+        return;
+      }
       if (text === '/status') {
         const snap = (() => {
           try { return require('../core/session-context').shared.snapshot(); } catch { return {}; }
@@ -276,6 +286,7 @@ class TelegramNotifier {
     eventBus.on(EVENTS.CIRCUIT_BREAKER_HIT, (payload) => this._onCircuitBreaker(payload));
     eventBus.on(EVENTS.OPTIONS_CHAIN_STALE, (payload) => this._onStale(payload));
     eventBus.on(EVENTS.POSITION_CLOSED,     (payload) => this._onClosed(payload));
+    eventBus.on(EVENTS.SWING_SCAN_COMPLETED,(payload) => this._onSwingScanCompleted(payload));
   }
 
   async _onSignal(payload) {
@@ -332,6 +343,163 @@ class TelegramNotifier {
     if (!this._bot) return;
     const text = `*Trade Closed*\nRealised P&L: ₹${payload.realisedPnl}\nDuration: ${payload.duration}s\nReason: ${payload.reason}`;
     this._bot.sendMessage(this._authorizedId, text + footer(), { parse_mode: 'Markdown' });
+  }
+
+  // ── /smm command handler ──────────────────────────────────────────────────
+
+  _handleSmm(chatId, text) {
+    const parts = text.split(/\s+/);
+    // parts[0] = '/smm'
+    const sub   = (parts[1] || '').toLowerCase();
+
+    // /smm positions
+    if (sub === 'positions') {
+      const { readOpen } = require('../journal/swing-journal');
+      const open = readOpen();
+      if (open.length === 0) {
+        this._bot.sendMessage(chatId, `No open swing trades.${footer()}`);
+        return;
+      }
+      const lines = open.map((t, idx) =>
+        `${idx + 1}. *${t.symbol}* | ${t.setup_id} | ${t.direction}\n` +
+        `   Entry: ₹${t.entry_price} | Stop: ₹${t.stop_loss} | Shares: ${t.shares}\n` +
+        `   Date: ${t.trade_date}`
+      );
+      this._bot.sendMessage(chatId,
+        `*Open Swing Trades (${open.length})*\n\n${lines.join('\n\n')}${footer()}`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    // /smm exit SYMBOL PRICE
+    if (sub === 'exit') {
+      const symbol    = (parts[2] || '').toUpperCase();
+      const exitPrice = parseFloat(parts[3]);
+      if (!symbol || isNaN(exitPrice)) {
+        this._bot.sendMessage(chatId, `Usage: /smm exit SYMBOL PRICE\nExample: /smm exit RELIANCE 2950${footer()}`);
+        return;
+      }
+      const { writeExit, readOpen } = require('../journal/swing-journal');
+      const open = readOpen().find(t => t.symbol === symbol);
+      if (!open) {
+        this._bot.sendMessage(chatId, `No open trade found for ${symbol}.${footer()}`);
+        return;
+      }
+      const exitDate = new Date().toISOString().slice(0, 10);
+      writeExit({ symbol, exitPrice, exitReason: 'MANUAL', exitDate, notes: null });
+      eventBus.emit(EVENTS.SWING_TRADE_EXITED, { symbol, exitPrice, exitDate });
+      this._bot.sendMessage(chatId,
+        `*Exit logged*\n${symbol} | ₹${exitPrice} | MANUAL\nDate: ${exitDate}${footer()}`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    // /smm enter SYMBOL SETUP_ID [LONG|SHORT]
+    if (sub === 'enter') {
+      const symbol    = (parts[2] || '').toUpperCase();
+      const setupId   = (parts[3] || '').toLowerCase();
+      const direction = (parts[4] || 'LONG').toUpperCase();
+      if (!symbol || !setupId) {
+        this._bot.sendMessage(chatId,
+          `Usage: /smm enter SYMBOL SETUP_ID [LONG|SHORT]\nExample: /smm enter RELIANCE smm-checklist LONG${footer()}`
+        );
+        return;
+      }
+      this._bot.sendMessage(chatId, `Looking up ${symbol}/${setupId}...${footer()}`);
+
+      try {
+        const swingScanner = require('../intelligence/swing-scanner');
+        const { signals } = swingScanner.scan([symbol], [setupId]);
+        const sig = signals.find(s => s.direction === direction)
+                 || signals.find(s => s.direction === (direction === 'LONG' ? 'SHORT' : 'LONG'));
+
+        if (!sig) {
+          this._bot.sendMessage(chatId, `No TRIGGERED signal for ${symbol}/${setupId} today.${footer()}`);
+          return;
+        }
+
+        const { writeEntry } = require('../journal/swing-journal');
+        const tradeDate = new Date().toISOString().slice(0, 10);
+        writeEntry({
+          symbol:     sig.symbol,
+          setupId:    sig.setupId,
+          direction:  sig.direction,
+          entryPrice: sig.entry,
+          stopLoss:   sig.stopLoss,
+          target:     sig.target,
+          shares:     sig.size.shares,
+          tradeDate,
+        });
+        eventBus.emit(EVENTS.SWING_TRADE_ENTERED, { symbol: sig.symbol, setupId: sig.setupId, direction: sig.direction });
+
+        this._bot.sendMessage(chatId,
+          `*Entry logged*\n` +
+          `${sig.symbol} | ${sig.setupName} | ${sig.direction}\n` +
+          `Entry: ₹${sig.entry.toFixed(2)} | Stop: ₹${sig.stopLoss.toFixed(2)} | Target: ₹${sig.target.toFixed(2)}\n` +
+          `RR: ${sig.riskReward.toFixed(1)}× | Shares: ${sig.size.shares} | Capital: ₹${sig.size.capitalRequired.toLocaleString('en-IN')}\n` +
+          `Date: ${tradeDate}${footer()}`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (err) {
+        this._bot.sendMessage(chatId, `Entry failed: ${err.message}${footer()}`);
+      }
+      return;
+    }
+
+    // /smm [SYMBOL] — scan
+    const symbolFilter = sub && sub !== '' && !['enter', 'exit', 'positions'].includes(sub)
+      ? [sub.toUpperCase()]
+      : null;
+
+    this._bot.sendMessage(chatId,
+      `Scanning${symbolFilter ? ` ${symbolFilter[0]}` : ' universe'}...${footer()}`
+    );
+
+    try {
+      const swingScanner = require('../intelligence/swing-scanner');
+      const { signals, asOf } = swingScanner.scan(symbolFilter);
+      this._sendSignalReport(chatId, signals, asOf);
+    } catch (err) {
+      this._bot.sendMessage(chatId, `Swing scan error: ${err.message}${footer()}`);
+    }
+  }
+
+  _formatSignalCard(sig) {
+    const dir  = sig.direction === 'LONG' ? '🟢' : '🔴';
+    const sub  = sig.subtype ? `\nPattern: ${sig.subtype}` : '';
+    return (
+      `${dir} *${sig.symbol} | ${sig.setupName} | ${sig.direction}*${sub}\n` +
+      `Entry: ₹${sig.entry.toFixed(2)} | Stop: ₹${sig.stopLoss.toFixed(2)} | Target: ₹${sig.target.toFixed(2)}\n` +
+      `RR: ${sig.riskReward.toFixed(1)}× | Shares: ${sig.size.shares} | Capital: ₹${sig.size.capitalRequired.toLocaleString('en-IN')}`
+    );
+  }
+
+  _sendSignalReport(chatId, signals, asOf) {
+    if (signals.length === 0) {
+      this._bot.sendMessage(chatId,
+        `📊 *Swing Signals — ${asOf}*\n\nNo TRIGGERED signals found today.${footer()}`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    const { writeSignal } = require('../journal/swing-journal');
+    signals.forEach(s => writeSignal(s));
+
+    const cards = signals.map(s => this._formatSignalCard(s)).join('\n\n');
+    this._bot.sendMessage(chatId,
+      `📊 *Swing Signals — ${asOf}*\n\n${cards}\n\n_${signals.length} signal(s) found_${footer()}`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  _onSwingScanCompleted(payload) {
+    if (!this._bot) return;
+    const { signals, count } = payload;
+    if (!signals || count === 0) return;
+    this._sendSignalReport(this._authorizedId, signals, new Date().toISOString().slice(0, 10));
   }
 
   /**

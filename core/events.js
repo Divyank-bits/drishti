@@ -84,6 +84,13 @@ module.exports = Object.freeze({
   SWING_BACKTEST_STARTED:   'SWING_BACKTEST_STARTED',
   SWING_BACKTEST_COMPLETED: 'SWING_BACKTEST_COMPLETED',
 
+  // ── Phase 8 — Swing Scanner ───────────────────────────────────────────────
+  SWING_SCAN_STARTED:     'SWING_SCAN_STARTED',
+  SWING_SCAN_COMPLETED:   'SWING_SCAN_COMPLETED',
+  SWING_SIGNAL_TRIGGERED: 'SWING_SIGNAL_TRIGGERED',
+  SWING_TRADE_ENTERED:    'SWING_TRADE_ENTERED',
+  SWING_TRADE_EXITED:     'SWING_TRADE_EXITED',
+
   // ── System ───────────────────────────────────────────────────────────────
   SYSTEM_READY:        'SYSTEM_READY',
   DAILY_SUMMARY:       'DAILY_SUMMARY',

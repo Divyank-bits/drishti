@@ -185,6 +185,22 @@ async function boot() {
       'ANTHROPIC_API_KEY absent or unavailable — system will run in RULES-only mode');
   }
 
+  // ── Phase 8: Evening swing scanner ───────────────────────────────────────
+  if (config.SWING_SCAN_ENABLED) {
+    const cron        = require('node-cron');
+    const { sync }    = require('./data/daily-candles');
+    const swingScanner = require('./intelligence/swing-scanner');
+    const [hh, mm]    = config.SWING_SCAN_TIME.split(':');
+    cron.schedule(`${mm} ${hh} * * 1-5`, async () => {
+      log('INFO', 'SwingScan', 'Evening scan starting — syncing candles...');
+      await Promise.all(config.SWING_UNIVERSE.map(sym =>
+        sync(sym).catch(e => log('WARN', 'SwingScan', `sync failed for ${sym}: ${e.message}`))
+      ));
+      swingScanner.scan();
+    }, { timezone: 'Asia/Kolkata' });
+    log('INFO', 'SwingScan', `Evening scan scheduled at ${config.SWING_SCAN_TIME} IST (Mon–Fri)`);
+  }
+
   log('INFO', 'System',
     `Boot complete | ` +
     `Intelligence: ${config.INTELLIGENCE_MODE} | ` +
