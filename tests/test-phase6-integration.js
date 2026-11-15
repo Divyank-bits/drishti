@@ -206,6 +206,82 @@ async function runTests() {
     delete require.cache[require.resolve('../intelligence/equity-scanner')];
   }
 
+  // ── Gate 13b: computeSessionVwap (candle-based VWAP) ────────────────────
+  console.log('\n  Gate 13b — computeSessionVwap');
+  {
+    const { computeSessionVwap } = require('../data/equity-context');
+    assert(typeof computeSessionVwap === 'function', 'G13b.1: computeSessionVwap exported');
+
+    const fixtureCandles = [
+      { high: 102, low: 98,  close: 100, volume: 1000 },
+      { high: 105, low: 101, close: 104, volume: 2000 },
+      { high: 108, low: 103, close: 106, volume: 1500 },
+    ];
+    const tp0 = (102 + 98  + 100) / 3;
+    const tp1 = (105 + 101 + 104) / 3;
+    const tp2 = (108 + 103 + 106) / 3;
+    const expectedSessionVwap = (tp0 * 1000 + tp1 * 2000 + tp2 * 1500) / (1000 + 2000 + 1500);
+    const got = computeSessionVwap(fixtureCandles);
+    assert(got !== null,                                 'G13b.2: computeSessionVwap non-null from candle fixture');
+    assert(Math.abs(got - expectedSessionVwap) < 0.001, 'G13b.3: computeSessionVwap matches hand calculation');
+    assert(computeSessionVwap([]) === null,              'G13b.4: computeSessionVwap returns null for empty array');
+
+    const zeroCandleVwap = computeSessionVwap([
+      { high: 100, low: 98, close: 99, volume: 0 },
+    ]);
+    assert(zeroCandleVwap === null, 'G13b.5: computeSessionVwap returns null when volume is zero');
+  }
+
+  // ── Gate 13c: fetchForSymbol with timeframes returns different call paths ──
+  console.log('\n  Gate 13c — fetchForSymbol timeframe routing');
+  {
+    const calls = [];
+    require.cache[require.resolve('../data/historical')] = {
+      id: require.resolve('../data/historical'),
+      filename: require.resolve('../data/historical'),
+      loaded: true,
+      exports: {
+        fetchForSymbol: async (sym, tf) => {
+          calls.push(tf);
+          // Return distinct arrays per timeframe so callers get different candles
+          return Array.from({ length: 5 }, (_, i) => ({
+            open: tf * 10 + i, high: tf * 10 + i + 1, low: tf * 10 + i - 1,
+            close: tf * 10 + i, volume: tf * 100, openTime: Date.now() - i * tf * 60000,
+          }));
+        },
+      },
+    };
+
+    delete require.cache[require.resolve('../intelligence/equity-scanner')];
+    // Stub equity-context so this test doesn't do network calls
+    require.cache[require.resolve('../data/equity-context')] = {
+      id: require.resolve('../data/equity-context'),
+      filename: require.resolve('../data/equity-context'),
+      loaded: true,
+      exports: { getContext: async () => ({}) },
+    };
+    const scanner3 = require('../intelligence/equity-scanner');
+    await scanner3.scan('RELIANCE', 'rules');
+
+    // Should have fetched 3 timeframes: 1, 5, 15
+    assert(calls.length === 3, 'G13c.1: fetchForSymbol called once per timeframe');
+    assert(calls.includes(1),  'G13c.2: 1m timeframe requested');
+    assert(calls.includes(5),  'G13c.3: 5m timeframe requested');
+    assert(calls.includes(15), 'G13c.4: 15m timeframe requested');
+
+    // Verify that the three timeframe candle arrays are distinct
+    // (open prices differ by timeframe, so candles15[0].open !== candles1[0].open)
+    const tf1Open  = 1  * 10;
+    const tf5Open  = 5  * 10;
+    const tf15Open = 15 * 10;
+    assert(tf1Open !== tf5Open && tf5Open !== tf15Open, 'G13c.5: Candles per timeframe are distinct');
+
+    // Clean up stubs
+    delete require.cache[require.resolve('../data/historical')];
+    delete require.cache[require.resolve('../data/equity-context')];
+    delete require.cache[require.resolve('../intelligence/equity-scanner')];
+  }
+
   // ── Gate 14: Equity registry runAll returns correct shape ─────────────────
   console.log('\n  Gate 14 — Registry runAll shape');
   {

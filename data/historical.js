@@ -88,41 +88,43 @@ class Historical {
   }
 
   /**
-   * Seeds candle history for a watchlist symbol on boot (Phase 5 scanner use).
+   * Seeds candle history for a watchlist symbol on boot (Phase 5/6 scanner use).
    * Returns the fetched candles without emitting events or writing to the candle builder.
-   * The caller (scan-scheduler) injects them into indicator-engine as needed.
-   * @param {string} symbol — e.g. 'BANKNIFTY'
+   * The caller (scan-scheduler, equity-scanner) injects them into indicator-engine as needed.
+   * @param {string} symbol   — e.g. 'BANKNIFTY'
+   * @param {number} timeframe — candle interval in minutes: 1, 5, or 15 (default 15)
    * @returns {Promise<Array>} array of {open,high,low,close,volume,openTime} candles
    */
-  async fetchForSymbol(symbol) {
+  async fetchForSymbol(symbol, timeframe = 15) {
     const sym = symbol.toUpperCase();
-    log('INFO', `Fetching historical candles for ${sym}`);
+    const tf  = Number(timeframe) || 15;
+    log('INFO', `Fetching historical candles for ${sym} (${tf}m)`);
 
-    // Yahoo first — Dhan's 15m historical API only returns ~17 candles regardless of range.
+    // Yahoo first — Dhan's intraday historical API only returns ~17 candles regardless of range.
     // Yahoo reliably gives full history. Dhan is used as fallback if Yahoo fails.
     try {
-      const candles = await this._fetchFromYahooSymbol(sym);
-      log('INFO', `${sym}: ${candles.length} candles from Yahoo`);
+      const candles = await this._fetchFromYahooSymbol(sym, tf);
+      log('INFO', `${sym} (${tf}m): ${candles.length} candles from Yahoo`);
       return candles.slice(-COUNT);
     } catch (err) {
-      log('WARN', `${sym} Yahoo historical failed: ${err.message}`);
+      log('WARN', `${sym} (${tf}m) Yahoo historical failed: ${err.message}`);
     }
 
     if (config.DATA_SOURCE === 'DHAN') {
       try {
-        const candles = await this._fetchFromDhanSymbol(sym);
-        log('INFO', `${sym}: ${candles.length} candles from Dhan`);
+        const candles = await this._fetchFromDhanSymbol(sym, tf);
+        log('INFO', `${sym} (${tf}m): ${candles.length} candles from Dhan`);
         return candles.slice(-COUNT);
       } catch (err) {
-        log('WARN', `${sym} Dhan historical failed: ${err.message}`);
+        log('WARN', `${sym} (${tf}m) Dhan historical failed: ${err.message}`);
       }
     }
 
-    log('WARN', `${sym}: all historical sources failed — returning empty array`);
+    log('WARN', `${sym} (${tf}m): all historical sources failed — returning empty array`);
     return [];
   }
 
-  async _fetchFromYahooSymbol(symbol) {
+  async _fetchFromYahooSymbol(symbol, timeframe = 15) {
     // Yahoo Finance ticker: BANKNIFTY → ^NSEBANK, FINNIFTY → ^NSEFIN etc.
     const YAHOO_MAP = {
       NIFTY:     '%5ENSEI',
@@ -131,8 +133,15 @@ class Historical {
     };
     const ticker = YAHOO_MAP[symbol] || `${symbol}.NS`;
 
+    // Yahoo limits 1m history to ~7 days; 5m/15m go back ~60 days
+    const tf = Number(timeframe) || 15;
+    const intervalMap = { 1: '1m', 5: '5m', 15: '15m' };
+    const rangeMap    = { 1: '7d', 5: '60d', 15: '60d' };
+    const interval    = intervalMap[tf] || '15m';
+    const range       = rangeMap[tf]    || '60d';
+
     const res = await this._http.get(
-      `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=15m&range=10d`,
+      `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${interval}&range=${range}`,
       { timeout: 10000 }
     );
 
@@ -150,7 +159,7 @@ class Historical {
     })).filter((c) => c.close != null);
   }
 
-  async _fetchFromDhanSymbol(symbol) {
+  async _fetchFromDhanSymbol(symbol, timeframe = 15) {
     const DHAN_SECURITY_MAP = {
       // Indices
       NIFTY:      { securityId: config.DHAN_SECURITY_ID, segment: config.DHAN_EXCHANGE_SEGMENT, instrument: 'INDEX' },
@@ -187,9 +196,10 @@ class Historical {
     }
 
     const toDate   = new Date();
-    // 50 × 15m candles ≈ 1.5 trading days. Fetch 30 calendar days back
-    // to safely cover weekends, holidays, and thin trading sessions.
-    const fromDate = new Date(toDate - 30 * 24 * 60 * 60 * 1000);
+    const tf       = Number(timeframe) || 15;
+    // For 1m: 7 days; for 5m/15m: 30 days to safely cover weekends and holidays
+    const lookbackDays = tf === 1 ? 7 : 30;
+    const fromDate = new Date(toDate - lookbackDays * 24 * 60 * 60 * 1000);
     const fmt = (d) => d.toISOString().slice(0, 10);
 
     const res = await this._http.post(
@@ -200,7 +210,7 @@ class Historical {
         instrument:      entry.instrument,
         expiryCode:      0,
         oi:              false,
-        interval:        '15',
+        interval:        String(tf),
         fromDate:        fmt(fromDate),
         toDate:          fmt(toDate),
       },

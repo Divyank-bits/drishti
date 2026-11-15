@@ -13,6 +13,9 @@
     "test:phase4": "node tests/test-phase4-strategies.js && node tests/test-phase4-allocator.js && node tests/test-phase4-integration.js",
     "test:phase5": "node tests/test-phase5-scanner.js && node tests/test-phase5-watchlist.js && node tests/test-phase5-integration.js",
     "test:phase6": "node tests/test-phase6-strategies.js && node tests/test-phase6-confluence.js && node tests/test-phase6-integration.js",
+    "test:phase7": "node tests/test-phase7-candles.js && node tests/test-phase7-analysis.js && node tests/test-phase7-setups.js && node tests/test-phase7-backtester.js && node tests/test-phase7-lookahead.js",
+    "swing:sync": "node -e \"const dc = require('./data/daily-candles'); const cfg = require('./config'); (async () => { for (const sym of cfg.SWING_UNIVERSE) { const n = await dc.sync(sym); console.log(sym + ': ' + n + ' rows'); } })()\"",
+    "swing:backtest": "node swing-backtest.js --sample IS",
     "scrip:fetch": "node scripts/fetch-dhan-scrip-ids.js"
   },
   "dependencies": {

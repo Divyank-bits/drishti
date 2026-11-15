@@ -57,7 +57,7 @@ function _computeIndicators(candles) {
 async function _fetchCandles(symbol, timeframe) {
   const historical = require('../data/historical');
   try {
-    const candles = await historical.fetchForSymbol(symbol);
+    const candles = await historical.fetchForSymbol(symbol, timeframe);
     return candles;
   } catch (err) {
     log('WARN', `${symbol} candle fetch (${timeframe}m) failed: ${err.message}`);

@@ -80,6 +80,10 @@ module.exports = Object.freeze({
   EQUITY_PATTERN_FORMING:   'EQUITY_PATTERN_FORMING',    // confluence ≥ FORMING threshold
   EQUITY_PATTERN_CONFIRMED: 'EQUITY_PATTERN_CONFIRMED',  // confluence ≥ CONFIRMED threshold
 
+  // ── Phase 7 — Swing Backtest ─────────────────────────────────────────────
+  SWING_BACKTEST_STARTED:   'SWING_BACKTEST_STARTED',
+  SWING_BACKTEST_COMPLETED: 'SWING_BACKTEST_COMPLETED',
+
   // ── System ───────────────────────────────────────────────────────────────
   SYSTEM_READY:        'SYSTEM_READY',
   DAILY_SUMMARY:       'DAILY_SUMMARY',

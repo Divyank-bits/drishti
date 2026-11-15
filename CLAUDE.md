@@ -27,7 +27,9 @@ Each phase is only started after the user explicitly confirms the previous phase
 | **Pre-5** | Critical fixes — basket orders, per-position StateMachine, boot reconciliation, anti-hunt knobs, snapshot collection | ✅ COMPLETE |
 | **5** | Deep scan / watchlist — multi-symbol scanner, ranked watchlist, `/scan` Telegram command | ✅ COMPLETE |
 | **6** | Equity directional scan — pattern detection (5 named patterns), VWAP, confluence scoring, `/scan RELIANCE` | ✅ COMPLETE |
-| **7** | Backtesting + analytics — SQLite, NSE Bhavcopy, candle replay, performance report (optional, skippable) | 🔜 NEXT |
+| **7** | Swing setup engine + setup backtester — daily candle store, analysis library, 6 swing setups, backtester + report | 🔜 NEXT |
+| **8** | Evening scanner, `/smm` command, risk module, journal | 🔜 |
+| **9** | Options backtesting + analytics (optional) — SQLite, NSE Bhavcopy, candle replay, performance report | 🔜 |
 
 **Do not implement code from a future phase while building the current one.**
 
@@ -92,9 +94,38 @@ index.js                ← app entry point / boot sequence
 holidays.json           ← NSE market holidays list
 
 /snapshots              ← daily options chain NDJSON files (git-ignored, written by snapshot-store.js)
-/backtest               ← Phase 7: candle replayer, options replayer, runner, report
-/analytics              ← Phase 7: SQLite query helpers
 /strategies/equity      ← Phase 6: equity directional strategies (separate from options)
+
+/analysis                      ← Phase 7: pure functions, no I/O
+  candles.js                   ← candle anatomy + candlestick pattern detection
+  swings.js                    ← pivot detection, trend structure, S/R levels
+  swing-indicators.js          ← EMA/MACD/Stochastic/RSI/BB/ADX/Heikin Ashi/volume series
+  divergence.js                ← regular bullish/bearish divergence
+  fibonacci.js                 ← retracement of the last swing leg
+  features.js                  ← buildFeatures(daily) → all series, index-aligned
+
+/data
+  daily-candles.js             ← Phase 7: daily OHLCV fetch + SQLite cache + weekly aggregation
+
+/strategies/swing              ← Phase 7: swing setups (separate from /strategies/equity)
+  base.swing-setup.js
+  registry.js
+  smm-checklist.swing-setup.js
+  soldiers-crows.swing-setup.js
+  counter-attack.swing-setup.js
+  sandwich.swing-setup.js
+  mother-candle.swing-setup.js
+  fake-breakout.swing-setup.js
+
+/backtest
+  swing-backtester.js          ← Phase 7: walks history, simulates trades
+  swing-report.js              ← Phase 7: metrics + console report + setup_stats writer
+
+swing-backtest.js              ← Phase 7: CLI entry point
+/tests/fixtures/swing          ← hand-built candle fixtures (JSON)
+
+/backtest                      ← Phase 9: candle replayer, options replayer, runner, report
+/analytics                     ← Phase 9: SQLite query helpers
 ```
 
 ---
@@ -113,8 +144,11 @@ npm run test:phase2          # 6 test files sequentially
 npm run test:phase3          # node test-phase3.js
 npm run test:phase4          # 3 test files: strategies (76), allocator (28), integration (31)
 npm run test:phase5          # Phase 5 (once built)
+npm run test:phase6          # Phase 6 integration tests
 npm run test:phase7          # Phase 7 (once built)
-node backtest.js --strategy iron-condor --from 2026-01-01 --to 2026-04-01  # Phase 7
+npm run swing:sync           # Phase 7: sync daily candles for SWING_UNIVERSE
+npm run swing:backtest       # Phase 7: run in-sample backtest
+node swing-backtest.js --sample IS   # Phase 7: CLI backtest entry point
 
 # Ad-hoc tests
 node tests/test-nse.js             # verify NSE data source connectivity

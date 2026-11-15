@@ -74,6 +74,25 @@ function resetDailyState() {
   _vwapState.clear();
 }
 
+/**
+ * Computes VWAP from an array of intraday OHLCV candles (today's session).
+ * typicalPrice = (H + L + C) / 3.  Returns null when total volume is zero.
+ * Used by getContext() as a fallback when no ticks have been recorded.
+ * @param {Array<{high: number, low: number, close: number, volume: number}>} candles
+ * @returns {number | null}
+ */
+function computeSessionVwap(candles) {
+  if (!Array.isArray(candles) || candles.length === 0) return null;
+  let tpv = 0;
+  let vol = 0;
+  for (const c of candles) {
+    const tp = (c.high + c.low + c.close) / 3;
+    tpv += tp * (c.volume || 0);
+    vol += c.volume || 0;
+  }
+  return vol === 0 ? null : tpv / vol;
+}
+
 // ── Yahoo Finance prev day OHLC ───────────────────────────────────────────────
 
 // Maps NSE symbol names to Yahoo Finance tickers for equity stocks
@@ -177,7 +196,18 @@ async function getContext(symbol) {
     }
   }
 
-  const vwap    = getVwap(sym);
+  // Prefer tick-accumulated VWAP; fall back to session VWAP from recent candles
+  let vwap = getVwap(sym);
+  if (vwap === null) {
+    try {
+      const historical = require('./historical');
+      const candles = await historical.fetchForSymbol(sym, 15);
+      vwap = computeSessionVwap(candles);
+    } catch (_) {
+      // best-effort; leave vwap as null
+    }
+  }
+
   const state   = _vwapState.get(sym);
   const dayOpen = state?.dayOpen ?? null;
 
@@ -197,4 +227,5 @@ module.exports = {
   setDayOpen,
   getVwap,
   resetDailyState,
+  computeSessionVwap,
 };

@@ -104,6 +104,44 @@ const config = {
   // Confluence score threshold (0–100) → FORMING pattern (watch alert)
   EQUITY_SCAN_FORMING_THRESHOLD: parseFloat(process.env.EQUITY_SCAN_FORMING_THRESHOLD) || 40,
 
+  // ── Phase 7 — Swing Setup Engine ─────────────────────────────────────────
+  SWING_UNIVERSE: (process.env.SWING_UNIVERSE ||
+    'RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK,SBIN,WIPRO,AXISBANK,KOTAKBANK,LT,' +
+    'BHARTIARTL,ITC,HINDUNILVR,BAJFINANCE,MARUTI,TATASTEEL,SUNPHARMA,NTPC'
+  ).split(',').map(s => s.trim()),
+  SWING_HISTORY_YEARS: 5,
+
+  SWING_PIVOT_K: 5,                 // bars each side to confirm a pivot            [assumption]
+  SWING_LEVEL_LOOKBACK: 250,        // bars searched for S/R levels                 [assumption]
+  SWING_LEVEL_CLUSTER_PCT: 1.0,     // pivots within 1% form one level              [assumption]
+  SWING_AT_LEVEL_PCT: 1.0,          // "at support/resistance" tolerance            [assumption]
+
+  SWING_VOLUME_AVG_PERIOD: 10,      // "average of last few days"                   [assumption: 10]
+  SWING_HEAVY_VOLUME_MULT: 1.0,     // "more than average"                          (course)
+  SWING_CROSSOVER_LOOKBACK: 3,      // "in last 3 periods/candles"                  (course)
+  SWING_MIN_RR: 3,                  // reward/risk must be above 3                  (course)
+
+  SWING_TIDE_INDICATOR: 'MACD_LINE', // 'MACD_HIST' | 'MACD_LINE'                    confirmed by user
+  SWING_WAVE_OSCILLATOR: 'STOCH',   // 'STOCH' | 'RSI'
+  SWING_STOCH: { period: 14, signalPeriod: 3 },                                   // [assumption]
+  SWING_STOCH_OVERSOLD: 30,         // PCO must start from at/below this            [assumption]
+  SWING_STOCH_OVERBOUGHT: 70,       // NCO must start from at/above this            [assumption]
+  SWING_SMM_SL_MODE: 'OSC_PCO_CANDLE', // 'OSC_PCO_CANDLE' | 'SIG_CANDLE_MEDIAN'   (course gives both)
+
+  SWING_SMALL_BODY_PCT: 30,         // neutral candle: body <= 30% of range         [assumption]
+  SWING_STRONG_BODY_PCT: 60,        // plain bullish/bearish candle: body >= 60%    [assumption]
+  SWING_WICK_BODY_MULT: 2,          // hammer wick >= 2 x body                      (course: 2-3x)
+  SWING_MOTHER_ATR_MULT: 1.5,       // mother candle range >= 1.5 x ATR14           [assumption]
+  SWING_MOTHER_MIN_INSIDE: 3,       // "next few candles" inside the mother         [assumption]
+  SWING_SETUP_VALID_BARS: 10,       // how long a pending setup waits for trigger   [assumption]
+
+  SWING_BT_COST_PCT: 0.30,          // round-trip cost + slippage, % of entry       [open question 3]
+  SWING_BT_MAX_HOLD_DAYS: 40,       // time stop                                    [assumption]
+  SWING_BT_EXIT_MODE: 'TARGET_SL',  // 'TARGET_SL' | 'TRAIL_EMA'
+  SWING_BT_STOP_MODE: 'CLOSE_BASED',// 'CLOSE_BASED' | 'INTRADAY_TOUCH'
+  SWING_BT_OOS_FRACTION: 0.30,      // most recent 30% of dates held out
+  SWING_BT_MIN_TRADES: 30,          // below this → LOW_SAMPLE
+
   // ── Anti-Hunt Config Knobs (Pre-Phase 5) ──────────────────────────────────
   // When false, Rule 3 volume gate is skipped — required when DATA_SOURCE=NSE (volume is always 0)
   ANTI_HUNT_VOLUME_REQUIRED: process.env.ANTI_HUNT_VOLUME_REQUIRED !== 'false',

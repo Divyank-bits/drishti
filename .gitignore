@@ -145,5 +145,13 @@ vite.config.ts.timestamp-*
 # Trade journal file
 journal/trades.ndjson
 
-# Options chain snapshots — accumulated for Phase 7 backtesting
+# Options chain snapshots — accumulated for Phase 9 backtesting
 snapshots/
+
+# SQLite database files
+drishti.db
+drishti.db-shm
+drishti.db-wal
+
+# Swing backtest result logs
+backtest-results/
