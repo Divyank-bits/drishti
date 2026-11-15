@@ -79,6 +79,8 @@ function runIronCondor({ symbol, from, to }) {
   const candles = loadCandles(symbol, from, to);
   if (candles.length === 0) {
     log('WARN', `No candle data for ${symbol} ${from}→${to}`);
+    log('WARN', `Run: node sync-bhavcopy.js --symbol ${symbol} --from ${from} --to ${to}`);
+    log('WARN', `Then: node -e "require('./data/daily-candles').sync('${symbol}').then(n => console.log('synced', n))" to fetch underlying index prices`);
     return [];
   }
 

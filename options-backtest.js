@@ -12,8 +12,8 @@
  *   --to       YYYY-MM-DD    (default: today)
  *
  * Prerequisites:
- *   1. Daily candles synced: npm run swing:sync
- *   2. Bhavcopy synced:      node sync-bhavcopy.js --from ... --to ...
+ *   Bhavcopy synced: node sync-bhavcopy.js --from ... --to ...
+ *   Underlying index candles are auto-synced from Yahoo Finance on first run.
  */
 'use strict';
 
@@ -44,7 +44,24 @@ console.log(`  Strategies : ${strategies.join(', ')}`);
 console.log(`  Period     : ${from} → ${to}`);
 console.log(`  Data       : EOD_BHAVCOPY\n`);
 
-const trades = run({ symbols, strategies, from, to });
-printReport(trades, { from, to, symbols, strategies });
+(async () => {
+  // Auto-sync underlying index candles (NIFTY, BANKNIFTY) if not present
+  const { sync } = require('./data/daily-candles');
+  const { readDailyCandles } = require('./data/db');
+  for (const sym of symbols) {
+    const existing = readDailyCandles(sym, from, to);
+    if (existing.length === 0) {
+      console.log(`[setup] No daily candles for ${sym} — syncing from Yahoo Finance...`);
+      try {
+        const n = await sync(sym);
+        console.log(`[setup] ${sym}: synced ${n} rows\n`);
+      } catch (e) {
+        console.warn(`[setup] ${sym} sync failed: ${e.message}\n`);
+      }
+    }
+  }
 
-console.log('Done.');
+  const trades = run({ symbols, strategies, from, to });
+  printReport(trades, { from, to, symbols, strategies });
+  console.log('Done.');
+})();

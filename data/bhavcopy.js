@@ -10,8 +10,8 @@
 
 const fs      = require('fs');
 const path    = require('path');
-const https   = require('https');
 const zlib    = require('zlib');
+const axios   = require('axios');
 const { writeBhavcopyBatch } = require('./db');
 
 const MONTHS = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
@@ -35,36 +35,32 @@ function bhavcopyUrl(isoDate) {
 }
 
 /**
- * Fetch a URL and return a Buffer.
+ * Fetch a URL and return the raw response as a Buffer.
+ * Uses axios so redirects and content-encoding are handled automatically.
+ * responseType:'arraybuffer' disables axios's own decompression so we get
+ * the raw ZIP bytes.
  * @param {string} url
  * @returns {Promise<Buffer>}
  */
-function fetchBuffer(url) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Referer': 'https://www.nseindia.com/',
-      },
-      timeout: 30000,
-    }, (res) => {
-      if (res.statusCode === 404) {
-        reject(new Error(`HTTP 404 — file not found: ${url}`));
-        return;
-      }
-      if (res.statusCode !== 200) {
-        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-        return;
-      }
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end',  () => resolve(Buffer.concat(chunks)));
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error(`Timeout: ${url}`)); });
+async function fetchBuffer(url) {
+  const res = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 30000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Referer': 'https://www.nseindia.com/',
+    },
+    // axios follows redirects by default; maxRedirects=5
+    maxRedirects: 5,
+    validateStatus: (status) => status < 500,
   });
+
+  if (res.status === 404) throw new Error(`HTTP 404 — file not found: ${url}`);
+  if (res.status !== 200) throw new Error(`HTTP ${res.status} for ${url}`);
+
+  return Buffer.from(res.data);
 }
 
 /**
@@ -199,16 +195,16 @@ function parseCsv(csvText, filterSymbol, isoDate) {
 }
 
 function nseExpiryToIso(raw) {
-  // "29-FEB-2024" or "29FEB2024"
-  const m1 = raw.match(/^(\d{2})-([A-Z]{3})-(\d{4})$/);
+  // Handles "29-FEB-2024", "29-Feb-2024", "29FEB2024" (NSE uses title-case in some years)
+  const m1 = raw.match(/^(\d{2})-([A-Za-z]{3})-(\d{4})$/);
   if (m1) {
-    const mon = MONTHS.indexOf(m1[2]);
+    const mon = MONTHS.indexOf(m1[2].toUpperCase());
     if (mon === -1) return null;
     return `${m1[3]}-${String(mon + 1).padStart(2, '0')}-${m1[1]}`;
   }
-  const m2 = raw.match(/^(\d{2})([A-Z]{3})(\d{4})$/);
+  const m2 = raw.match(/^(\d{2})([A-Za-z]{3})(\d{4})$/);
   if (m2) {
-    const mon = MONTHS.indexOf(m2[2]);
+    const mon = MONTHS.indexOf(m2[2].toUpperCase());
     if (mon === -1) return null;
     return `${m2[3]}-${String(mon + 1).padStart(2, '0')}-${m2[1]}`;
   }
@@ -239,7 +235,9 @@ async function syncDate(isoDate, symbol) {
     writeBhavcopyBatch(rows);
     log('INFO', `${isoDate}: stored ${rows.length} row(s)${symbol ? ` for ${symbol}` : ''}`);
   } else {
-    log('WARN', `${isoDate}: no matching rows (symbol=${symbol || 'ALL'})`);
+    // Show first 2 lines of CSV so we can diagnose format or symbol mismatches
+    const preview = csvText.split('\n').slice(0, 2).map(l => l.slice(0, 120)).join(' | ');
+    log('WARN', `${isoDate}: no matching rows (symbol=${symbol || 'ALL'}) — csv preview: ${preview}`);
   }
 
   return { date: isoDate, rows: rows.length };
