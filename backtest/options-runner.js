@@ -5,8 +5,7 @@
  *
  * Limitations (all labeled EOD_BHAVCOPY in results):
  *   - Entry at open of option on signal day — no intraday timing
- *   - Stop check: short CE intraday high > shortCe + config.IC_STOP_BUFFER_POINTS
- *                 or short PE intraday low  < shortPe - config.IC_STOP_BUFFER_POINTS
+ *   - Stop check: underlying EOD close > shortCe (CE stop) or < shortPe (PE stop)
  *   - Exit at close (or settle on expiry)
  *   - No multi-lot sizing — 1 lot per trade
  */
@@ -14,7 +13,7 @@
 
 const config = require('../config');
 const { load: loadCandles } = require('./candle-replayer');
-const { getCondorEntry, getCondorExit, getPremium } = require('./options-replayer');
+const { getCondorEntry, getCondorExit } = require('./options-replayer');
 const { writeBtTrade } = require('../data/db');
 
 function log(level, msg) {
@@ -93,16 +92,12 @@ function runIronCondor({ symbol, from, to }) {
     const date = candle.date;
 
     // ── Manage open position ──────────────────────────────────────────────
+    let closedToday = false;
     if (open) {
       const isExpiry = date >= open.expiry;
 
-      // EOD stop check: short CE high > shortCe (ITM threat), short PE low < shortPe
-      const ceData = getPremium({ symbol, optionType: 'CE', strike: open.shortCe, date });
-      const peData = getPremium({ symbol, optionType: 'PE', strike: open.shortPe, date });
-
-      let stopHit = false;
-      if (ceData && ceData.high != null && ceData.high > open.shortCe) stopHit = true;
-      if (peData && peData.low  != null && peData.low  < open.shortPe) stopHit = true;
+      // EOD stop: exit when NIFTY closes beyond the short strike on either side
+      const stopHit = candle.close > open.shortCe || candle.close < open.shortPe;
 
       if (stopHit || isExpiry) {
         const exit = getCondorExit({
@@ -137,11 +132,12 @@ function runIronCondor({ symbol, from, to }) {
         writeBtTrade(record);
         trades.push({ ...record, exitDate: date });
         open = null;
+        closedToday = true;
       }
     }
 
     // ── Entry check ───────────────────────────────────────────────────────
-    if (!open) {
+    if (!open && !closedToday) {
       // Simple entry rule: enter if no active position and VIX proxy ok
       // (EOD backtest skips full entry filter — just enter on first available day)
       const expiry  = nearestExpiry(date);
