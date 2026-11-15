@@ -43,8 +43,10 @@ function fetchBuffer(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Accept': '*/*',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Referer': 'https://www.nseindia.com/',
       },
       timeout: 30000,
     }, (res) => {
@@ -66,21 +68,64 @@ function fetchBuffer(url) {
 }
 
 /**
- * Decompress a zip buffer and return the CSV text inside.
- * Uses Node zlib unzip (handles deflate-compressed zip entries).
- * Falls back to raw buffer if not zipped (some NSE files are plain CSV).
+ * Extract the first file from a ZIP archive buffer and return its text content.
+ *
+ * ZIP local file header layout (little-endian):
+ *   0-3   signature  0x504B0304
+ *   4-5   version needed
+ *   6-7   flags         (bit 3 = sizes in data descriptor, not local header)
+ *   8-9   compression   0=stored, 8=DEFLATE
+ *   10-13 mod time/date
+ *   14-17 CRC-32
+ *   18-21 compressed size   (0 when bit 3 is set)
+ *   22-25 uncompressed size (0 when bit 3 is set)
+ *   26-27 filename length
+ *   28-29 extra field length
+ *   30+   filename, extra field, data
+ *
+ * Falls back to gzip, then plain text.
  * @param {Buffer} buf
  * @returns {Promise<string>}
  */
 function unzipBuffer(buf) {
   return new Promise((resolve, reject) => {
-    zlib.unzip(buf, (err, result) => {
-      if (err) {
-        // Not zipped — return raw
-        resolve(buf.toString('utf8'));
-      } else {
-        resolve(result.toString('utf8'));
+    // ── ZIP: magic PK\x03\x04 ────────────────────────────────────────────────
+    if (buf.length > 30 && buf[0] === 0x50 && buf[1] === 0x4B &&
+        buf[2] === 0x03 && buf[3] === 0x04) {
+
+      const flags       = buf.readUInt16LE(6);
+      const compression = buf.readUInt16LE(8);
+      const filenameLen = buf.readUInt16LE(26);
+      const extraLen    = buf.readUInt16LE(28);
+      const dataOffset  = 30 + filenameLen + extraLen;
+
+      if (compression === 0) {
+        // Stored (no compression)
+        resolve(buf.slice(dataOffset).toString('utf8'));
+        return;
       }
+
+      // DEFLATE: compressed size may be 0 when bit 3 (data descriptor) is set
+      let compressedSize = buf.readUInt32LE(18);
+      const compressed   = compressedSize > 0
+        ? buf.slice(dataOffset, dataOffset + compressedSize)
+        : buf.slice(dataOffset);  // read to end; inflateRaw stops at stream end
+
+      zlib.inflateRaw(compressed, (err, result) => {
+        if (err) {
+          reject(new Error(`ZIP inflateRaw failed: ${err.message}`));
+        } else {
+          resolve(result.toString('utf8'));
+        }
+      });
+      return;
+    }
+
+    // ── Gzip fallback ─────────────────────────────────────────────────────────
+    zlib.gunzip(buf, (err, result) => {
+      if (!err) { resolve(result.toString('utf8')); return; }
+      // ── Plain text fallback ──────────────────────────────────────────────
+      resolve(buf.toString('utf8'));
     });
   });
 }
@@ -181,6 +226,12 @@ async function syncDate(isoDate, symbol) {
   log('DEBUG', `Fetching ${url}`);
 
   const buf     = await fetchBuffer(url);
+
+  // Guard: NSE sometimes returns an HTML error page (Cloudflare/firewall) instead of zip
+  if (buf.length > 0 && buf[0] === 0x3C) {  // '<' — likely HTML
+    throw new Error(`Got HTML response instead of ZIP for ${isoDate} — may need Referer/cookie`);
+  }
+
   const csvText = await unzipBuffer(buf);
   const rows    = parseCsv(csvText, symbol || null, isoDate);
 
