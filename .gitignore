@@ -155,3 +155,6 @@ drishti.db-wal
 
 # Swing backtest result logs
 backtest-results/
+
+# Swing journal (live trade log)
+journal/swing-trades.ndjson

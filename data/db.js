@@ -97,6 +97,40 @@ db.exec(`
     PRIMARY KEY (setup_id, direction, sample, exit_mode)
   );
 
+  CREATE TABLE IF NOT EXISTS options_bhavcopy (
+    symbol      TEXT NOT NULL,
+    expiry      TEXT NOT NULL,
+    option_type TEXT NOT NULL,
+    strike      REAL NOT NULL,
+    date        TEXT NOT NULL,
+    open        REAL,
+    high        REAL,
+    low         REAL,
+    close       REAL,
+    settle      REAL,
+    contracts   INTEGER,
+    oi          INTEGER,
+    PRIMARY KEY (symbol, expiry, option_type, strike, date)
+  );
+
+  CREATE TABLE IF NOT EXISTS options_bt_trades (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date     TEXT NOT NULL,
+    strategy     TEXT NOT NULL,
+    trade_date   TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    expiry       TEXT NOT NULL,
+    short_ce     REAL,
+    long_ce      REAL,
+    short_pe     REAL,
+    long_pe      REAL,
+    premium_in   REAL,
+    premium_out  REAL,
+    realised_pnl REAL,
+    exit_reason  TEXT,
+    data_source  TEXT DEFAULT 'EOD_BHAVCOPY'
+  );
+
   CREATE TABLE IF NOT EXISTS swing_trades (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol        TEXT NOT NULL,
@@ -262,6 +296,60 @@ function writeSetupStats(row) {
   }
 }
 
+const upsertBhavcopy = db.prepare(`
+  INSERT INTO options_bhavcopy
+    (symbol, expiry, option_type, strike, date, open, high, low, close, settle, contracts, oi)
+  VALUES
+    (@symbol, @expiry, @option_type, @strike, @date, @open, @high, @low, @close, @settle, @contracts, @oi)
+  ON CONFLICT(symbol, expiry, option_type, strike, date) DO UPDATE SET
+    open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+    settle=excluded.settle, contracts=excluded.contracts, oi=excluded.oi
+`);
+
+const insertBtTrade = db.prepare(`
+  INSERT INTO options_bt_trades
+    (run_date, strategy, trade_date, symbol, expiry, short_ce, long_ce, short_pe, long_pe,
+     premium_in, premium_out, realised_pnl, exit_reason, data_source)
+  VALUES
+    (@run_date, @strategy, @trade_date, @symbol, @expiry, @short_ce, @long_ce, @short_pe, @long_pe,
+     @premium_in, @premium_out, @realised_pnl, @exit_reason, @data_source)
+`);
+
+const getBhavcopyRow = db.prepare(`
+  SELECT * FROM options_bhavcopy
+  WHERE symbol=? AND option_type=? AND strike=? AND date>=? AND date<=?
+  ORDER BY ABS(julianday(expiry) - julianday(?)) ASC
+  LIMIT 1
+`);
+
+const getBhavcopySeries = db.prepare(`
+  SELECT * FROM options_bhavcopy
+  WHERE symbol=? AND option_type=? AND strike=? AND expiry=? AND date>=? AND date<=?
+  ORDER BY date ASC
+`);
+
+function writeBhavcopyRow(row) {
+  try { upsertBhavcopy.run(row); }
+  catch (err) { log('ERROR', `writeBhavcopyRow failed: ${err.message}`); }
+}
+
+const writeBhavcopyBatch = db.transaction((rows) => {
+  for (const row of rows) upsertBhavcopy.run(row);
+});
+
+function writeBtTrade(row) {
+  try { insertBtTrade.run(row); }
+  catch (err) { log('ERROR', `writeBtTrade failed: ${err.message}`); }
+}
+
+function getOptionPrice(symbol, optionType, strike, tradeDate, nearExpiry) {
+  return getBhavcopyRow.get(symbol, optionType, strike, tradeDate, tradeDate, nearExpiry || tradeDate);
+}
+
+function getOptionSeries(symbol, optionType, strike, expiry, from, to) {
+  return getBhavcopySeries.all(symbol, optionType, strike, expiry, from, to);
+}
+
 const insertSwingTrade = db.prepare(`
   INSERT INTO swing_trades
     (symbol, setup_id, direction, entry_price, stop_loss, target, shares, trade_date, state)
@@ -310,4 +398,5 @@ module.exports = {
   db,
   writeTrade, writeSnapshot, writeScanResult, writeDaily, readDailyCandles, writeSetupStats,
   writeSwingTrade, closeSwingTrade, readOpenSwingTrades,
+  writeBhavcopyRow, writeBhavcopyBatch, writeBtTrade, getOptionPrice, getOptionSeries,
 };
